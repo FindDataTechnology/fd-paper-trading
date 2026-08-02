@@ -1,0 +1,161 @@
+<div align="center">
+
+**[English](./README.md)** | **[中文](./README_zh.md)**
+
+</div>
+
+# fd-trade
+
+Multi-tenant **stock paper-trading** service built on [Nautilus Trader](https://nautilustrader.io), exposed via a FastAPI REST + WebSocket API. Users can own multiple paper trading accounts and place orders through the API against real-time market data with **simulated fills** — no broker, no real capital.
+
+## Features
+
+- **Multi-user auth** — JWT + revocable API tokens (`fdt_` prefix)
+- **Multi-account management** — each user can create and manage multiple isolated paper accounts
+- **Order execution** — market and limit orders with simulated fills via Nautilus Trader's matching engine
+- **Position & cash ledgering** — real-time P&L, average cost, realized gains
+- **Real-time streaming** — WebSocket endpoint (`/ws`) pushes live quotes, order-status, and fill events
+- **Market data** — `SimulatedMarketDataProvider` (deterministic, for dev/tests) and `PolygonMarketDataProvider` (real prices, end-of-day on free tier)
+- **Web UI** — React + TypeScript SPA with login/register, accounts dashboard, order ticket, typeahead symbol search, interactive charts (TradingView `lightweight-charts`), and live streaming
+
+## Tech Stack
+
+- **Backend:** Python 3.12+, FastAPI + Uvicorn, SQLAlchemy 2.0 async, Alembic
+- **Database:** PostgreSQL (prod) / SQLite (tests)
+- **Auth:** JWT (`python-jose`) + bcrypt + revocable API tokens
+- **Execution:** Nautilus Trader (matching engine as stateless fill calculator)
+- **Frontend:** React 18 + TypeScript + Vite, TanStack Query + Zustand, TradingView `lightweight-charts`
+- **Testing:** pytest (backend), Vitest + React Testing Library (frontend), Playwright (e2e)
+
+## Quick Start
+
+```bash
+# 1. Install Python dependencies
+uv sync
+
+# 2. Configure environment
+cp .env.example .env   # edit DATABASE_URL, JWT_SECRET, market-data keys
+
+# 3. Provision PostgreSQL and apply migrations
+brew services start postgresql@14
+createdb fdtrade
+uv run alembic upgrade head
+
+# 4. (Optional) Build the web UI so FastAPI serves it at /
+cd web && npm install && npm run build && cd ..
+
+# 5. Run the API (OpenAPI docs at http://localhost:8000/docs)
+uv run fd-trade
+```
+
+> **Note:** On macOS with Homebrew, `postgresql@14` may run on port 5433 if 5432 is occupied. Adjust `DATABASE_URL` in `.env` accordingly.
+
+### Development
+
+```bash
+# Terminal 1: FastAPI backend on :8000
+uv run fd-trade
+
+# Terminal 2: Vite dev server on :5173 (proxies /api and /ws to backend)
+cd web && npm install && npm run dev
+```
+
+### Production
+
+```bash
+# Build the SPA and serve everything from FastAPI on a single origin
+cd web && npm run build
+uv run fd-trade   # SPA + API + /ws all at http://localhost:8000/
+```
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Web UI (React + Vite + TypeScript)                     │
+│  - TanStack Query for data fetching                     │
+│  - Zustand for state management                         │
+│  - TradingView lightweight-charts for charting          │
+│  - WebSocket client for real-time streaming             │
+└────────────────────┬────────────────────────────────────┘
+                     │ REST (/api/v1) + WebSocket (/ws)
+┌────────────────────▼────────────────────────────────────┐
+│  FastAPI Backend                                        │
+│  - Auth (JWT + API tokens)                              │
+│  - Account management                                   │
+│  - Order placement & cancellation                       │
+│  - Position & cash ledgering                            │
+│  - Market data API                                      │
+└────────────────────┬────────────────────────────────────┘
+                     │
+        ┌────────────┼────────────┐
+        ▼            ▼            ▼
+┌──────────┐  ┌──────────┐  ┌──────────┐
+│PostgreSQL│  │  Nautilus │  │  Market  │
+│(ledger)  │  │  (fills)  │  │  Data    │
+└──────────┘  └──────────┘  └──────────┘
+```
+
+**Execution model (v1):** Fills are computed by Nautilus Trader's matching engine via a stateless `BacktestEngine`-based fill calculator — one engine per order, `bypass_logging=True`. Account state lives in the database, isolated by `account_id`. The live `TradingNode` + `SandboxLiveExecClientFactory` are deferred.
+
+## Commands
+
+```bash
+# Backend
+uv run pytest                    # all backend tests (in-memory SQLite)
+uv run pytest tests/unit/        # unit tests only
+uv run pytest tests/e2e/         # end-to-end flows only
+uv run alembic upgrade head      # apply database migrations
+uv run alembic downgrade -1      # rollback last migration
+
+# Frontend
+cd web && npm test               # Vitest component tests
+cd web && npx playwright test    # Playwright e2e tests
+cd web && npm run build          # production build
+cd web && npm run dev            # dev server with hot reload
+```
+
+## API Overview
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/v1/auth/register` | Register a user |
+| POST | `/api/v1/auth/login` | Obtain a JWT access token |
+| POST | `/api/v1/tokens` | Create a revocable API token |
+| GET | `/api/v1/tokens` | List API tokens |
+| DELETE | `/api/v1/tokens/{id}` | Revoke an API token |
+| GET | `/api/v1/accounts` | List your accounts |
+| POST | `/api/v1/accounts` | Create a paper account |
+| GET | `/api/v1/accounts/{id}` | Account summary (balance, equity, counts) |
+| POST | `/api/v1/accounts/{id}/deposit` | Deposit / withdraw (signed amount) |
+| POST | `/api/v1/accounts/{id}/reset` | Reset account (cancel orders, flatten, restore balance) |
+| GET | `/api/v1/accounts/{id}/positions` | List open positions |
+| GET | `/api/v1/accounts/{id}/orders` | List orders (optional `?status=`) |
+| POST | `/api/v1/orders` | Place a market/limit order (simulated fill, returns 202) |
+| DELETE | `/api/v1/orders/{id}` | Cancel an open order |
+| GET | `/api/v1/orders/{id}` | Query a single order |
+| GET | `/api/v1/instruments/search?q=` | Search instruments by symbol/name |
+| GET | `/api/v1/instruments/{symbol}/bars` | Historical OHLCV bars (`?timeframe=&limit=`) |
+| WS | `/ws` | Stream quotes + order/fill events (auth in first message) |
+
+**Authentication:** `Authorization: Bearer <jwt>` or `Authorization: Bearer <api-token>` (tokens start with `fdt_`).
+
+**WebSocket:** Send `{"type":"auth","token":"<jwt>"}` as the first message, then `{"type":"subscribe","symbol":"AAPL"}` / `{"type":"unsubscribe","symbol":"AAPL"}`.
+
+**Errors:** Standardized format: `{"error": {"code": "...", "message": "...", "fields": [...]}}`.
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/your-feature`
+3. Make your changes and add tests
+4. Run the test suite: `uv run pytest && cd web && npm test`
+5. Commit with a descriptive message: `git commit -m "Add your feature"`
+6. Push to your fork: `git push origin feature/your-feature`
+7. Open a Pull Request
+
+Please ensure your code follows the existing style and all tests pass before submitting.
+
+## License
+
+This project is proprietary software. All rights reserved.

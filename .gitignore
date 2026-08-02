@@ -1,0 +1,33 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# Local SQLite DBs
+*.db
+*.sqlite
+
+# Frontend (web/) build artifacts and deps
+web/dist/
+web/node_modules/
+
+# Playwright
+web/playwright-report/
+web/test-results/
+
+# macOS
+.DS_Store
+
+# Claude Code local
+.claude/
