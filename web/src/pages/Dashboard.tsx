@@ -5,14 +5,33 @@ import { useRealtime } from "../realtime/useRealtime";
 import { apiErrorMessage } from "../api/client";
 import { mid, money } from "../lib/format";
 import PositionsTable from "../components/PositionsTable";
+import Watchlist from "../components/Watchlist";
+import OrderPanel from "../components/OrderPanel";
+import PriceChart from "../components/PriceChart";
+import DailyPnl from "../components/DailyPnl";
+import { SelectedSymbolProvider, useSelectedSymbol } from "../store/selectedSymbol";
 
 export default function Dashboard() {
   const activeAccountId = useUI((s) => s.activeAccountId);
-  const { data: summary } = useAccountSummary(activeAccountId);
-  const { data: positions } = usePositions(activeAccountId);
+
+  if (!activeAccountId) {
+    return <div className="muted">Select or create an account to begin.</div>;
+  }
+
+  return (
+    <SelectedSymbolProvider>
+      <DashboardContent accountId={activeAccountId} />
+    </SelectedSymbolProvider>
+  );
+}
+
+function DashboardContent({ accountId }: { accountId: string }) {
+  const { data: summary } = useAccountSummary(accountId);
+  const { data: positions } = usePositions(accountId);
   const quotes = useRealtime((s) => s.quotes);
   const deposit = useDeposit();
   const reset = useResetAccount();
+  const { selectedSymbol } = useSelectedSymbol();
 
   const [amount, setAmount] = useState("");
 
@@ -27,27 +46,24 @@ export default function Dashboard() {
     }, 0) ?? 0);
 
   function handleDeposit() {
-    if (!activeAccountId || !amount) return;
+    if (!accountId || !amount) return;
     if (Number(amount) <= 0) return;
-    deposit.mutate({ id: activeAccountId, amount });
+    deposit.mutate({ id: accountId, amount });
     setAmount("");
   }
 
   function handleReset() {
-    if (!activeAccountId) return;
+    if (!accountId) return;
     if (!window.confirm("Reset this account? Cancels open orders and flattens positions.")) return;
-    reset.mutate({ id: activeAccountId });
-  }
-
-  if (!activeAccountId) {
-    return <div className="muted">Select or create an account to begin.</div>;
+    reset.mutate({ id: accountId });
   }
 
   return (
     <div className="col">
-      <div className="grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+      <div className="grid" style={{ gridTemplateColumns: "repeat(5, 1fr)" }}>
         <Stat label="Cash" value={money(cash)} />
         <Stat label="Equity (indicative)" value={money(indicativeEquity)} />
+        <DailyPnl accountId={accountId} />
         <Stat label="Open positions" value={String(summary?.open_positions ?? 0)} />
         <Stat label="Open orders" value={String(summary?.open_orders ?? 0)} />
       </div>
@@ -76,7 +92,21 @@ export default function Dashboard() {
         )}
       </div>
 
-      <PositionsTable accountId={activeAccountId} />
+      {/* Three-column trading workspace */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "250px 1fr 350px",
+          gap: 16,
+          minHeight: 500,
+        }}
+      >
+        <Watchlist />
+        <PriceChart symbol={selectedSymbol} />
+        <OrderPanel />
+      </div>
+
+      <PositionsTable accountId={accountId} />
     </div>
   );
 }

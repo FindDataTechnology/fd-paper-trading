@@ -16,7 +16,12 @@ Multi-tenant **stock paper-trading** service built on [Nautilus Trader](https://
 - **Position & cash ledgering** — real-time P&L, average cost, realized gains
 - **Real-time streaming** — WebSocket endpoint (`/ws`) pushes live quotes, order-status, and fill events
 - **Market data** — `SimulatedMarketDataProvider` (deterministic, for dev/tests) and `PolygonMarketDataProvider` (real prices, end-of-day on free tier)
-- **Web UI** — React + TypeScript SPA with login/register, accounts dashboard, order ticket, typeahead symbol search, interactive charts (TradingView `lightweight-charts`), and live streaming
+- **Web UI** — React + TypeScript SPA with professional trading dashboard featuring:
+  - **Three-column workspace**: watchlist (live quotes), price chart, and order panel
+  - **Click-to-trade**: select any symbol from watchlist to instantly update chart and order form
+  - **Position management**: quick close/reduce actions with confirmation dialogs
+  - **Daily P&L tracking**: real-time calculation from realized + unrealized components
+  - **Typeahead symbol search**, interactive charts (TradingView `lightweight-charts`), and live streaming
 
 ## Tech Stack
 
@@ -97,6 +102,34 @@ uv run fd-trade   # SPA + API + /ws all at http://localhost:8000/
 ```
 
 **Execution model (v1):** Fills are computed by Nautilus Trader's matching engine via a stateless `BacktestEngine`-based fill calculator — one engine per order, `bypass_logging=True`. Account state lives in the database, isolated by `account_id`. The live `TradingNode` + `SandboxLiveExecClientFactory` are deferred.
+
+## Trading Dashboard
+
+The web UI provides a professional trading workspace optimized for active trading:
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ Watchlist (left) │ Price Chart  │ Order Ticket (right) │
+├──────────────────┼──────────────┼─────────────────────────────┤
+│ AAPL    $175.50▲│              │ Side: [Buy ▼] Sell          │
+│ TSLA    $250.20▼│ │ Type: [Market ▼] Limit       │
+│ NVDA    $890.10▲│   [graph]    │ Qty: [100]       Limit:$175  │
+│ SPY     $450.00▶│              │                             │
+│ QQQ     $400.25▶│              │ [BUY AAPL] [SELL AAPL] │
+│              Total PnL: (+$127)│                             │
+├──────────────────┴──────────────┴─────────────────────────────┤
+│ Positions Table (quick close/reduce buttons on each row)      │
+└───────────────────────────────────────────────────────────────┘
+```
+
+**Key features:**
+- **Watchlist**: Live quotes for tracked symbols (AAPL, TSLA, NVDA, SPY, QQQ), updated via WebSocket
+- **Click-to-trade**: Click any symbol in the watchlist to instantly update the chart and order panel
+- **Order panel**: Always-visible order entry form bound to the selected symbol
+- **Position actions**: Quick close/reduce buttons with confirmation dialogs
+- **Daily P&L**: Real-time calculation from realized gains + unrealized mark-to-market
+
+**Note:** Daily P&L is indicative (frontend-calculated) and may differ slightly from backend calculations. Mobile-responsive layout and user-configurable watchlists are planned for future releases.
 
 ## Commands
 

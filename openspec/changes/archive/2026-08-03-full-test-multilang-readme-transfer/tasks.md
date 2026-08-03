@@ -15,6 +15,6 @@
 ## 3. Transfer to GitHub Organization
 
 - [x] 3.1 Verify user has admin permissions on the `finddatatechnology` GitHub org
-- [ ] 3.2 Transfer the repo via `gh repo transfer finddatatechnology/fd-trade` (or GitHub UI)
-- [ ] 3.3 Update local remote: `git remote set-url origin git@github.com:finddatatechnology/fd-trade.git`
-- [ ] 3.4 Verify the transfer succeeded by checking `gh repo view` and pushing to the new remote
+- [x] 3.2 Transfer the repo via `gh repo transfer finddatatechnology/fd-trade` (or GitHub UI)
+- [x] 3.3 Update local remote: `git remote set-url origin git@github.com:finddatatechnology/fd-trade.git`
+- [x] 3.4 Verify the transfer succeeded by checking `gh repo view` and pushing to the new remote
