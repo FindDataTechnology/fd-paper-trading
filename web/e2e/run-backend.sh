@@ -20,6 +20,8 @@ fi
 
 export DATABASE_URL="sqlite+aiosqlite:///./e2e.db"
 export MARKET_DATA_PROVIDER="simulated"
+export OPENAI_API_KEY="test-mock-key"
+export OPENAI_API_BASE="http://localhost:8001/mock-openai"
 
 # Initialize the schema in the file-based SQLite DB. The models module must be
 # imported so its tables register with Base.metadata before create_all.

@@ -21,6 +21,7 @@ Multi-tenant **stock paper-trading** service built on [Nautilus Trader](https://
   - **Click-to-trade**: select any symbol from watchlist to instantly update chart and order form
   - **Position management**: quick close/reduce actions with confirmation dialogs
   - **Daily P&L tracking**: real-time calculation from realized + unrealized components
+  - **AI Chat Assistant**: conversational interface for placing orders, checking accounts, and managing trades
   - **Typeahead symbol search**, interactive charts (TradingView `lightweight-charts`), and live streaming
 
 ## Tech Stack
@@ -130,6 +131,39 @@ The web UI provides a professional trading workspace optimized for active tradin
 - **Daily P&L**: Real-time calculation from realized gains + unrealized mark-to-market
 
 **Note:** Daily P&L is indicative (frontend-calculated) and may differ slightly from backend calculations. Mobile-responsive layout and user-configurable watchlists are planned for future releases.
+
+## AI Chat Assistant
+
+The web UI includes an AI-powered chat assistant that allows you to interact with the trading system using natural language. Powered by OpenAI and CopilotKit, the assistant can:
+
+- **Place orders**: "Buy 100 shares of AAPL at market price"
+- **Check account balance**: "What's my cash balance?"
+- **View positions**: "Show my open positions"
+- **Cancel orders**: "Cancel my TSLA order"
+- **Get market insights**: "What's the current price of NVDA?"
+
+### Using the Chat Assistant
+
+1. Click the 💬 **Chat** button in the top navigation bar
+2. Type your request in the chat input
+3. The AI will process your request and execute the appropriate trading operation
+4. You'll see a confirmation with the results
+
+### Configuration
+
+The chat assistant requires an OpenAI API key. Set it in your `.env` file:
+
+```bash
+OPENAI_API_KEY=your_openai_api_key_here
+```
+
+You can also configure the model (default is `gpt-3.5-turbo`):
+
+```bash
+OPENAI_MODEL=gpt-4  # or gpt-3.5-turbo
+```
+
+**Note:** The chat assistant uses your active account context automatically. All operations are authenticated and authorized - you can only trade your own accounts.
 
 ## Commands
 

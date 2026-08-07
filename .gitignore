@@ -21,10 +21,13 @@ wheels/
 # Frontend (web/) build artifacts and deps
 web/dist/
 web/node_modules/
+web/copilot-runtime/node_modules/
 
 # Playwright
 web/playwright-report/
 web/test-results/
+.playwright-cli/
+**/.playwright-cli/
 
 # macOS
 .DS_Store

@@ -12,6 +12,9 @@ export default defineConfig({
       // SPA and API share one effective origin (no CORS).
       "/api": { target: "http://localhost:8000", changeOrigin: true },
       "/ws": { target: "ws://localhost:8000", ws: true },
+      // CopilotKit runtime (separate Node.js server)
+      "/copilotkit": { target: "http://localhost:4100", changeOrigin: true },
+      "/v1": { target: "http://localhost:4100", changeOrigin: true },
     },
   },
   build: {

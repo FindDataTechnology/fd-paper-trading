@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     per_user_symbol_limit: int = 20
 
 
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()

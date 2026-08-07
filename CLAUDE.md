@@ -81,6 +81,55 @@ Claude can place/cancel orders via MCP tools (FastMCP-based). Configure in `~/.c
 
 Get your JWT token via web UI login or `POST /api/v1/auth/token`.
 
+## Web Chat Assistant (CopilotKit)
+
+The web UI includes a CopilotKit-powered chat assistant that can manage orders via the MCP server.
+
+### Architecture
+
+```
+Browser (CopilotKit UI) → Vite proxy (/copilotkit) → Node.js runtime (port 4100)
+    ↓
+MCP server (port 8100, SSE transport) → FastAPI backend (port 8000)
+```
+
+### Running the chat
+
+```bash
+# Terminal 1: FastAPI backend
+uv run uvicorn fd_trade.api.app:create_app --factory --reload
+
+# Terminal 2: MCP server (HTTP/SSE mode for the runtime)
+TRADE_API_TOKEN=<jwt> uv run python -m fd_trade.mcp.http_server
+
+# Terminal 3: CopilotKit runtime
+cd web/copilot-runtime && npm install && node server.js
+
+# Terminal 4: Frontend
+cd web && npm run dev
+```
+
+### Configuration
+
+The runtime loads the repo-root `.env` file (the same one the Python backend
+reads) via `dotenv`, so LLM config lives in `.env` alongside the backend
+settings. The relevant vars (defaults in `web/copilot-runtime/server.js`):
+- `OPENAI_API_KEY` — API key for the LLM provider (required)
+- `OPENAI_API_BASE` — Base URL (must end with `/v1` for OpenAI-compatible APIs)
+- `COPILOT_MODEL` — Model name (e.g., `glm-5.2`, `doubao-seed-2-0-pro`)
+- `MCP_SERVER_URL` — MCP server URL (default: `http://127.0.0.1:8100/sse`)
+
+See the `# ---- AI Chat Assistant (CopilotKit + MCP) ----` section in `.env.example`.
+
+### Available MCP tools
+
+The chat assistant has access to the same tools as the Claude Code MCP server:
+- `list_accounts()` — discover account IDs
+- `get_account(account_id)` — check cash balance
+- `place_order(...)` — submit orders
+- `cancel_order(order_id)` — cancel pending orders
+- `list_orders(account_id, status?)` — query order history
+
 ---
 
 ## References
