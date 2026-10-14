@@ -34,3 +34,6 @@ web/test-results/
 
 # Claude Code local
 .claude/
+
+# Root-level tool caches (vitest etc.)
+node_modules/
