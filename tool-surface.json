@@ -1,0 +1,71 @@
+{
+  "schema": "mcp-tool-surface/v1",
+  "server": "fd-paper-trading",
+  "entry_path": "/fd-paper-trading",
+  "product_line": "wire",
+  "hosting": ["shared-instance"],
+  "description": "柏讯模拟交易（paper trading）MCP：多租户账户/订单/持仓/行情 + 策略双轨（模板与沙箱自定义代码）+ 回测与纸面实盘。调用者身份逐请求委托（进站 Authorization 转发），共享实例上每个调用者操作自己的账户。paper-only：无真实订单、无真实资金。",
+  "skills_eligible_for_packs": [
+    "paper-trading-conversation",
+    "paper-trading-strategy",
+    "paper-trading-market-inspection"
+  ],
+  "tool_groups": [
+    {
+      "group": "trading",
+      "level": "commercial",
+      "tools": [
+        "create_account",
+        "list_accounts",
+        "get_account",
+        "list_positions",
+        "place_order",
+        "cancel_order",
+        "list_orders"
+      ],
+      "data_sources": [
+        "服务自有 PostgreSQL（账户/订单/持仓/账本；每服务专用实例）"
+      ],
+      "notes": "账户生命周期可达对话（含开户）；deposit/reset 刻意不暴露为工具——现金调整留在 REST/SPA 面。下单走服务内无状态撮合计算器（paper-only）。"
+    },
+    {
+      "group": "market",
+      "level": "commercial",
+      "tools": [
+        "search_instruments",
+        "get_bars"
+      ],
+      "data_sources": [
+        "fd-open-data 本体（概念族可配：默认 nav.unit/fund/daily，为目录中真实有数据的一族；CRYPTO_*/IDX_* 概念活但零观测；股票 price.* 全族按 2026-10-07 政策保持弃用）"
+      ],
+      "notes": "数据覆盖由部署的概念族决定；技能必须诚实披露覆盖面，不得暗示全市场行情。"
+    },
+    {
+      "group": "strategy",
+      "level": "commercial",
+      "tools": [
+        "list_strategy_templates",
+        "create_strategy",
+        "update_strategy",
+        "list_strategies",
+        "get_strategy",
+        "run_backtest",
+        "get_strategy_run",
+        "list_strategy_runs",
+        "start_strategy",
+        "stop_strategy"
+      ],
+      "data_sources": [
+        "服务自有 PostgreSQL（策略/运行/权益曲线）",
+        "行情面同 market 组（回测与实盘共用同一价格世界）"
+      ],
+      "notes": "自定义代码轨默认关闭（allow_custom_code=false），按用户组开启；沙箱为真子进程（AST 白名单 + rlimit + 15s 墙钟）。"
+    }
+  ],
+  "registry": {
+    "entry_path": "/fd-paper-trading",
+    "upstream": "http://cheap6.mesh.finddata.cn:31894/mcp",
+    "expected_tool_count": 19,
+    "consumption_note": "壹座/私有客户端的逐用户消费走 mesh 直连（上游不进 registry 网关的 mcp-proxy——网关剥客户端 Authorization，见 auth_server/server.py _forward_headers）。网关条目仅作 discoverability；无每用户 scope/计费闸，身份与账本在本服务侧。"
+  }
+}
