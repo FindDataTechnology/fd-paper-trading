@@ -28,10 +28,6 @@ from .simulated import SIM_VENUE, SimulatedMarketDataProvider
 
 logger = logging.getLogger(__name__)
 
-_PRICE_CLOSE_CODE = "price.close"
-_ENTITY_TYPE = "stock"
-_PRICE_FREQUENCY = "daily"
-
 # How far back ``get_latest_close`` looks for a recent bar, and the maximum
 # history window served (matches the default group's max_backtest_days).
 _QUOTE_LOOKBACK_DAYS = 30
@@ -63,9 +59,25 @@ def _date_to_ts(d: str) -> int:
 
 
 class FdOpenDataMarketDataProvider(MarketDataProvider):
-    """Daily bars + close-derived quotes from the fd-open-data ontology."""
+    """Daily bars + close-derived quotes from the fd-open-data ontology.
 
-    def __init__(self) -> None:
+    The concept family it reads — (concept code, entity type, frequency) — is
+    configuration, defaulting to the live index-price family. A deprecated
+    concept yields a data gap (empty series), never an error.
+    """
+
+    def __init__(
+        self,
+        concept_code: str | None = None,
+        entity_type: str | None = None,
+        frequency: str | None = None,
+    ) -> None:
+        from ..config import get_settings
+
+        settings = get_settings()
+        self._concept_code = concept_code or settings.fd_open_data_concept
+        self._entity_type = entity_type or settings.fd_open_data_entity_type
+        self._frequency = frequency or settings.fd_open_data_frequency
         # Instruments and the search fallback share the SIM equity universe,
         # same as the Polygon provider.
         self._sim = SimulatedMarketDataProvider()
@@ -161,15 +173,19 @@ class FdOpenDataMarketDataProvider(MarketDataProvider):
         """(date, close) series for a symbol via read_range; [] on any gap."""
         session = get_database().get_session()
         try:
-            concept = self._price_close_concept(session)
+            concept = self._resolve_concept(session)
             if concept is None:
-                logger.warning("fd-open-data: %s concept not seeded", _PRICE_CLOSE_CODE)
+                # A deprecated or unseeded concept is a data gap, not an error.
+                logger.warning(
+                    "fd-open-data: concept %s (%s/%s) not available live",
+                    self._concept_code, self._entity_type, self._frequency,
+                )
                 return []
             entity_id = self._resolve_entity_id(session, symbol)
             if entity_id is None:
                 return []
             result = read_range(
-                session, [concept.id], _ENTITY_TYPE, entity_id, start, end
+                session, [concept.id], self._entity_type, entity_id, start, end
             )
             rows = result.get(concept.id) or []
             out: list[tuple[str, Decimal]] = []
@@ -189,7 +205,7 @@ class FdOpenDataMarketDataProvider(MarketDataProvider):
             res = session.execute(
                 select(Entity)
                 .where(
-                    Entity.entity_type == _ENTITY_TYPE,
+                    Entity.entity_type == self._entity_type,
                     Entity.code.ilike(like) | Entity.name_en.ilike(like),
                 )
                 .limit(20)
@@ -203,27 +219,31 @@ class FdOpenDataMarketDataProvider(MarketDataProvider):
         finally:
             session.close()
 
-    @staticmethod
-    def _price_close_concept(session) -> Concept | None:
-        """The daily price.close stock concept (prefer verified, non-deprecated)."""
+    def _resolve_concept(self, session) -> Concept | None:
+        """The configured family's concept (prefer verified, non-deprecated).
+
+        When several concepts match (e.g. the same code registered across
+        sources), exactly one is selected deterministically — verified first,
+        then lowest id — and only that one is read.
+        """
         res = session.execute(
             select(Concept)
             .where(
-                Concept.code == _PRICE_CLOSE_CODE,
-                Concept.entity_type == _ENTITY_TYPE,
-                Concept.frequency == _PRICE_FREQUENCY,
+                Concept.code == self._concept_code,
+                Concept.entity_type == self._entity_type,
+                Concept.frequency == self._frequency,
                 Concept.deprecated.is_(False),
             )
             .order_by(Concept.verified.desc(), Concept.id.asc())
         )
         return res.scalars().first()
 
-    @staticmethod
-    def _resolve_entity_id(session, symbol: str) -> int | None:
+    def _resolve_entity_id(self, session, symbol: str) -> int | None:
         """Map a ticker to the ontology's internal entity id (int PK)."""
         res = session.execute(
             select(Entity).where(
-                Entity.entity_type == _ENTITY_TYPE, Entity.code == symbol.upper()
+                Entity.entity_type == self._entity_type,
+                Entity.code == symbol.upper(),
             )
         )
         entity = res.scalars().first()

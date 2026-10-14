@@ -76,6 +76,14 @@ MARKET_DATA_PROVIDER=fd-open-data uv run fd-paper-trading
 
 The bootstrap prints a coverage report mapping the curated symbol universe to ontology entity IDs; unresolved symbols return no bars/quotes until the ontology seeds them (e.g. via the library's `migrate-astock-daily` or entity import commands).
 
+**Concept family** — the provider reads one concept, configured as code/entity-type/frequency (default `nav.unit`/`fund`/`daily` — fund NAV, the family with real production data, updated daily). `CRYPTO_*` and `IDX_*` concepts are live in the catalog but currently carry no observations:
+
+```bash
+FD_OPEN_DATA_CONCEPT=CRYPTO_PRICE FD_OPEN_DATA_ENTITY_TYPE=symbol MARKET_DATA_PROVIDER=fd-open-data uv run fd-paper-trading
+```
+
+A deprecated concept degrades to a data gap (no bars, no quotes), never an error. The stock `price.*` family is deprecated by curation policy and must not be re-registered.
+
 ### Development
 
 ```bash

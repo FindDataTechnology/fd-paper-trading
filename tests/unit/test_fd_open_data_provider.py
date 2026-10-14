@@ -180,7 +180,7 @@ def test_fetch_closes_maps_rows_and_skips_nulls(provider):
     ):
         mock_db.return_value.get_session.return_value = session
         closes = provider._fetch_closes_sync("aapl", "2026-08-05", "2026-08-07")
-    mock_read.assert_called_once_with(session, [7], "stock", 42, "2026-08-05", "2026-08-07")
+    mock_read.assert_called_once_with(session, [7], "fund", 42, "2026-08-05", "2026-08-07")
     assert closes == [("2026-08-05", Decimal("100.5")), ("2026-08-07", Decimal("101.25"))]
     session.close.assert_called_once()
 
@@ -205,3 +205,78 @@ def test_fetch_closes_empty_when_entity_missing(provider):
 
 def test_get_instrument_uses_sim_universe(provider):
     assert provider.get_instrument("AAPL") is not None
+
+
+# ---- concept family is configuration (paper-trading-standup) ----
+
+
+def test_family_from_explicit_arguments():
+    p = FdOpenDataMarketDataProvider(
+        concept_code="CRYPTO_PRICE", entity_type="symbol", frequency="daily"
+    )
+    assert p._concept_code == "CRYPTO_PRICE"
+    assert p._entity_type == "symbol"
+    assert p._frequency == "daily"
+
+
+def test_family_defaults_are_fund_nav(monkeypatch):
+    # No explicit args -> settings defaults (nav.unit/fund/daily), the family
+    # with real production data. Clear the settings cache so env is irrelevant.
+    monkeypatch.delenv("FD_OPEN_DATA_CONCEPT", raising=False)
+    from fd_paper_trading.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        p = FdOpenDataMarketDataProvider()
+        assert p._concept_code == "nav.unit"
+        assert p._entity_type == "fund"
+        assert p._frequency == "daily"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_family_resolved_from_env(monkeypatch):
+    monkeypatch.setenv("FD_OPEN_DATA_CONCEPT", "CRYPTO_PRICE")
+    from fd_paper_trading.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        p = FdOpenDataMarketDataProvider()
+        assert p._concept_code == "CRYPTO_PRICE"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_deprecated_concept_is_a_gap_not_a_crash(provider):
+    # _resolve_concept filters deprecated.is_(False), so a deprecated family
+    # resolves to None -> fetch yields [] (data gap), no exception.
+    session = _session_returning(concept=None)
+    with patch.object(mod, "get_database") as mock_db:
+        mock_db.return_value.get_session.return_value = session
+        assert provider._fetch_closes_sync("AAPL", "2026-08-05", "2026-08-07") == []
+
+
+def test_single_concept_selected_when_multiple_match():
+    # Two matching concepts (e.g. same code across sources): deterministic
+    # selection — verified first, then lowest id — and only that one is read.
+    c_verified = MagicMock(id=11)
+    c_first = MagicMock(id=5)
+    entity = MagicMock(id=42)
+    session = MagicMock()
+    first_res, second_res = MagicMock(), MagicMock()
+    # .first() on the ordered query returns the verified one (id 11)...
+    first_res.scalars.return_value.first.return_value = c_verified
+    second_res.scalars.return_value.first.return_value = entity
+    session.execute.side_effect = [first_res, second_res]
+    rows = [{"date": "2026-08-05", "value": 7.0}]
+    with (
+        patch.object(mod, "get_database") as mock_db,
+        patch.object(mod, "read_range", return_value={11: rows}) as mock_read,
+    ):
+        mock_db.return_value.get_session.return_value = session
+        p = FdOpenDataMarketDataProvider()
+        closes = p._fetch_closes_sync("AAPL", "2026-08-05", "2026-08-05")
+    assert closes == [("2026-08-05", Decimal("7.0"))]
+    # exactly one concept id is requested from read_range
+    requested = mock_read.call_args[0][1]
+    assert requested == [11]

@@ -47,6 +47,17 @@ class Settings(BaseSettings):
     market_data_api_key: str = ""
     per_user_symbol_limit: int = 20
 
+    # ---- fd-open-data concept family ----
+    # The concept the fd-open-data provider reads, as (code, entity_type,
+    # frequency). Defaults to fund NAV, the family with real production data
+    # (17k+ rows, updated daily). CRYPTO_*/IDX_* concepts are live in the
+    # catalog but carry no observations (price crawling stopped 2026-10-07).
+    # The stock price.* family stays deprecated by policy and must not be
+    # re-registered.
+    fd_open_data_concept: str = "nav.unit"
+    fd_open_data_entity_type: str = "fund"
+    fd_open_data_frequency: str = "daily"
+
     # ---- Live strategy runner (paper) ----
     # Poll interval for the supervised per-run task (design D5: default 30 min).
     # Tests override via ``app.state.strategy_runner.poll_seconds``.
