@@ -26,8 +26,7 @@ RUN uv sync --frozen --no-dev --no-install-project \
 RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app
 USER appuser
 
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+COPY --chmod=0755 entrypoint.sh /app/entrypoint.sh
 
 EXPOSE 8000
 ENTRYPOINT ["/app/entrypoint.sh"]
