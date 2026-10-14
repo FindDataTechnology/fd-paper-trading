@@ -1,0 +1,17 @@
+.venv/
+web/node_modules/
+web/dist/
+node_modules/
+__pycache__/
+*.pyc
+.git/
+.env
+.env.*
+!.env.example
+e2e.db
+*.db
+.pytest_cache/
+.ruff_cache/
+web/test-results/
+web/playwright-report/
+openspec/
