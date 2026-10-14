@@ -1,7 +1,8 @@
 # Web CopilotKit Chat
 
 ## Purpose
-A CopilotKit-powered chat assistant embedded in the fd-paper-trading web UI. The assistant can manage paper-trading orders and accounts via the fd-paper-trading MCP server.
+
+约束 CopilotKit 对话助手（已随独立化移除，本 spec 保留为历史约束记录——chat 面由平台 pack 的 persona 承担）。
 ## Requirements
 ### Requirement: Chat interface with AI assistant
 

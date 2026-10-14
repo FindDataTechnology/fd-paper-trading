@@ -1,7 +1,8 @@
 # strategy-backtest Specification
 
 ## Purpose
-TBD - created by syncing change add-quant-strategies. Update Purpose as needed.
+
+约束策略回测：真实日线序列上的回测运行、权益曲线与统计（收益/回撤/夏普/胜率）、异步运行生命周期。
 ## Requirements
 ### Requirement: Backtest run over real daily bars
 

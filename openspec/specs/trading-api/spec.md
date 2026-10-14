@@ -1,7 +1,8 @@
 # trading-api Specification
 
 ## Purpose
-TBD - created by archiving change paper-trading-system. Update Purpose after archive.
+
+约束版本化 REST API（/api/v1）：认证、账户、订单、行情、策略各端点的请求/响应契约与错误形状。
 ## Requirements
 ### Requirement: Versioned REST API under /api/v1
 

@@ -1,7 +1,8 @@
 # user-groups Specification
 
 ## Purpose
-TBD - created by syncing change add-quant-strategies. Update Purpose as needed.
+
+约束用户组限额：每组可配（活跃策略数/回测天数/日订单数/自定义代码门/标的白名单），默认组与注册挂组语义。
 ## Requirements
 ### Requirement: User groups with config
 

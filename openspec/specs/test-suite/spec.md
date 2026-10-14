@@ -1,7 +1,8 @@
 # test-suite Specification
 
 ## Purpose
-TBD - created by archiving change refactor-and-test-coverage. Update Purpose after archive.
+
+约束测试金字塔：后端单元/e2e（ASGI 传输）、前端组件（Vitest）、浏览器 e2e（Playwright）与 CI 三岗门，全部绿才算完成。
 ## Requirements
 ### Requirement: Backend unit tests for service-layer logic
 

@@ -1,6 +1,8 @@
 # Position Actions
 
-**Purpose**: Provide user-friendly controls for closing and reducing positions with appropriate safety mechanisms.
+## Purpose
+
+Provide user-friendly controls for closing and reducing positions with appropriate safety mechanisms.
 
 ## Requirements
 

@@ -1,7 +1,8 @@
 # strategy-sandbox Specification
 
 ## Purpose
-TBD - created by syncing change add-quant-strategies. Update Purpose as needed.
+
+约束自定义代码沙箱：AST 白名单、真子进程隔离（rlimit+墙钟超时）、失败语义（回测 FAILED / 实盘跳过该 bar）与组门（allow_custom_code）。
 ## Requirements
 ### Requirement: Evaluation contract
 

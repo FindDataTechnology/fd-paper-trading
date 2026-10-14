@@ -1,8 +1,8 @@
 # web-charts Specification
 
 ## Purpose
-TBD - created by syncing change trading-web-ui. Update Purpose after implementation.
 
+约束 Web 端图表：TradingView lightweight-charts 的 K 线渲染、实时报价联动与时间框切换。
 ## Requirements
 
 ### Requirement: Historical bars endpoint

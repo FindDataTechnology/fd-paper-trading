@@ -1,8 +1,8 @@
 # web-market-search Specification
 
 ## Purpose
-TBD - created by syncing change trading-web-ui. Update Purpose after implementation.
 
+约束 Web 端标的搜索：typeahead 交互、大小写不敏感匹配与空查询短路。
 ## Requirements
 
 ### Requirement: Symbol search endpoint

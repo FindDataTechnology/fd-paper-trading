@@ -1,8 +1,8 @@
 # web-realtime Specification
 
 ## Purpose
-TBD - created by syncing change trading-web-ui. Update Purpose after implementation.
 
+约束 Web 实时通道：/ws 订阅、报价/订单/成交事件的推送与 UI 状态同步。
 ## Requirements
 
 ### Requirement: WebSocket streaming endpoint

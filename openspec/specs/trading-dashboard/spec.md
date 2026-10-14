@@ -1,6 +1,8 @@
 # Trading Dashboard
 
-**Purpose**: Provide a comprehensive trading interface with live market data visualization and order entry capabilities.
+## Purpose
+
+Provide a comprehensive trading interface with live market data visualization and order entry capabilities.
 
 ## Requirements
 

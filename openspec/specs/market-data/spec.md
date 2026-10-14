@@ -1,7 +1,8 @@
 # market-data Specification
 
 ## Purpose
-TBD - created by archiving change paper-trading-system. Update Purpose after archive.
+
+约束行情供给抽象：provider 接口、三实现（模拟/Polygon/fd-open-data）的语义与数据缺口表达（None=gap）、概念族可配置，以及回测/实盘/撮合共用同一价格世界。
 ## Requirements
 ### Requirement: MarketDataProvider interface
 

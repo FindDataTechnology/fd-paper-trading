@@ -1,8 +1,8 @@
 # web-shell Specification
 
 ## Purpose
-TBD - created by syncing change trading-web-ui. Update Purpose after implementation.
 
+约束 Web 外壳：受保护路由、登录/注册流、布局导航与登出。
 ## Requirements
 
 ### Requirement: Single-page application shell

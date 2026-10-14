@@ -1,7 +1,8 @@
 # order-execution Specification
 
 ## Purpose
-TBD - created by archiving change paper-trading-system. Update Purpose after archive.
+
+约束订单撮合语义：无状态纯 Python 撮合计算器的市价/限价成交规则、购买力检查、成交记账（持仓/现金/已实现盈亏）、逐账户隔离与策略归因。
 ## Requirements
 ### Requirement: Stateless Nautilus fill calculator
 

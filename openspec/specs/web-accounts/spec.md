@@ -1,8 +1,8 @@
 # web-accounts Specification
 
 ## Purpose
-TBD - created by syncing change trading-web-ui. Update Purpose after implementation.
 
+约束 Web 端账户面：账户切换、开户入口、入金/重置交互与展示。
 ## Requirements
 
 ### Requirement: Account dashboard

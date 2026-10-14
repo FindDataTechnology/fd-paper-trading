@@ -1,7 +1,8 @@
 # strategy-conversation Specification
 
 ## Purpose
-TBD - created by syncing change add-quant-strategies. Update Purpose as needed.
+
+约束策略 MCP 工具面：模板目录/策略 CRUD/回测/纸面实盘十工具、LLM 可自修复的结构化错误、双传输一致性。
 ## Requirements
 ### Requirement: Strategy MCP tools
 

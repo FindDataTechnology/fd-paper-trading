@@ -2,13 +2,7 @@
 
 ## Purpose
 
-A dedicated mobile H5 trading surface at `/m` that auto-adapts its layout to
-phones (portrait and landscape) and tablets, reusing the same JWT auth, `/ws`
-realtime layer, and React Query hooks as the desktop dashboard. The desktop
-dashboard is left untouched. The surface is fully actionable: account
-switching, order placement/cancellation, position close/reduce, and strategy
-paper-run start/stop.
-
+约束移动端 H5 外壳（/m）：自适应布局、与桌面同源同凭据、行情/持仓/订单/策略四 tab。
 ## Requirements
 
 ### Requirement: Mobile trading route under shared auth

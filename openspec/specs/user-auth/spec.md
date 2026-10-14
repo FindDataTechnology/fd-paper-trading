@@ -1,7 +1,8 @@
 # user-auth Specification
 
 ## Purpose
-TBD - created by archiving change paper-trading-system. Update Purpose after archive.
+
+约束用户认证：注册/登录（JWT）、可吊销长命 API token（fdt_ 前缀、只存哈希、吊销即时生效）与令牌分流。
 ## Requirements
 ### Requirement: User registration
 

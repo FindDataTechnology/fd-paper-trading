@@ -1,7 +1,8 @@
 # strategy-management Specification
 
 ## Purpose
-TBD - created by syncing change add-quant-strategies. Update Purpose as needed.
+
+约束策略实体与版本化：spec 双轨（模板/自定义代码）形态校验、版本号随 spec 变更递增、命名与描述编辑不触发版本。
 ## Requirements
 ### Requirement: Strategy entity with versioning
 

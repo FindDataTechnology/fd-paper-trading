@@ -1,7 +1,8 @@
 # paper-accounts Specification
 
 ## Purpose
-TBD - created by archiving change paper-trading-system. Update Purpose after archive.
+
+约束纸面账户域模型：多账户归属、开户初始资金、充值/重置语义与现金账本事务。
 ## Requirements
 ### Requirement: Multi-account ownership
 

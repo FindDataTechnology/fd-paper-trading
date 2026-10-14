@@ -1,8 +1,8 @@
 # web-order-entry Specification
 
 ## Purpose
-TBD - created by syncing change trading-web-ui. Update Purpose after implementation.
 
+约束 Web 端下单面板：市价/限价表单校验、提交反馈与错误呈现。
 ## Requirements
 
 ### Requirement: Order ticket

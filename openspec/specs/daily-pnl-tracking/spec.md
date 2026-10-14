@@ -1,3 +1,6 @@
+## Purpose
+约束账户日度盈亏的口径与呈现：已实现+未实现两分量的实时计算、按日聚合的正确性，以及前端对其的展示契约。
+
 ## ADDED Requirements
 
 ### Requirement: Daily P&L calculation

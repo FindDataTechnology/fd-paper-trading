@@ -1,7 +1,8 @@
 # strategy-live-execution Specification
 
 ## Purpose
-TBD - created by syncing change add-quant-strategies. Update Purpose as needed.
+
+约束纸面实盘运行（paper run）：生命周期（QUEUED/STARTING/RUNNING/STOPPED/…）、逐 bar 评估、订单归因与恢复语义。
 ## Requirements
 ### Requirement: Paper run lifecycle
 

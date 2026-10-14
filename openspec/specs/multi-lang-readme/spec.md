@@ -1,7 +1,8 @@
 # multi-lang-readme Specification
 
 ## Purpose
-TBD - created by syncing change full-test-multilang-readme-transfer. Update Purpose after archive.
+
+约束双语 README 的文件命名（README.md + README.zh-CN.md）、互链与内容对等，保证公开仓的中英文门面对等。
 ## Requirements
 ### Requirement: Multi-language README with language switcher
 
