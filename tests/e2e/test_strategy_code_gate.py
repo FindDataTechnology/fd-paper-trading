@@ -72,8 +72,10 @@ async def test_code_strategy_allowed_and_backtests_when_enabled(client, app):
     assert r.status_code == 201, r.text
     strategy_id = r.json()["id"]
 
-    # Backtest through the sandbox (one subprocess per bar).
-    end = date(2026, 8, 8)
+    # Backtest through the sandbox (one subprocess per bar). The simulated
+    # provider anchors its series to "now", so the window must be relative to
+    # today — a hardcoded past date rots as the calendar advances.
+    end = date.today()
     start = end - timedelta(days=20)
     r = await client.post(
         f"/api/v1/strategies/{strategy_id}/backtests",
