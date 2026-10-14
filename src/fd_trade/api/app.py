@@ -13,13 +13,14 @@ from ..execution import PaperExecutionService
 from ..marketdata import MarketDataProvider, build_market_data_provider
 from ..persistence.base import Database, create_database
 from ..realtime import ConnectionManager
+from ..strategy.runner import PaperRunSupervisor
 from .errors import (
     APIError,
     api_error_handler,
     http_exception_handler,
     validation_exception_handler,
 )
-from .routes import accounts, auth, instruments, orders
+from .routes import accounts, auth, groups, instruments, orders, strategies
 from .routes import ws as ws_route
 
 
@@ -40,9 +41,15 @@ def _default_web_dist() -> Path:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await app.state.realtime.start()
+    # Resume live paper runs that were active when the process last exited
+    # (design D8 recovery); their tasks poll for new daily bars.
+    await app.state.strategy_runner.recover()
     try:
         yield
     finally:
+        # Cancel runner tasks without touching run status so the next boot's
+        # recover() resumes them.
+        await app.state.strategy_runner.shutdown()
         await app.state.realtime.stop()
 
 
@@ -69,15 +76,22 @@ def create_app(
         description="Multi-tenant stock paper-trading service built on Nautilus Trader.",
         lifespan=lifespan,
     )
-    app.state.db: Database = create_database(url)
+    app.state.db: Database = create_database(
+        url, pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow
+    )
     app.state.settings = settings
     if market_data_provider is not None:
         provider = market_data_provider
     else:
         provider = build_market_data_provider(settings)
     app.state.market_data_provider = provider
-    app.state.execution_service = PaperExecutionService(provider=provider)
+    app.state.execution_service = PaperExecutionService(
+        provider=provider,
+        rate_limit_per_second=settings.order_rate_per_second,
+        rate_limit_burst=settings.order_rate_burst,
+    )
     app.state.realtime = ConnectionManager(provider=provider)
+    app.state.strategy_runner = PaperRunSupervisor(app)
 
     # Standardized error responses.
     app.add_exception_handler(APIError, api_error_handler)
@@ -88,6 +102,8 @@ def create_app(
     app.include_router(auth.router, prefix="/api/v1")
     app.include_router(accounts.router, prefix="/api/v1")
     app.include_router(orders.router, prefix="/api/v1")
+    app.include_router(strategies.router, prefix="/api/v1")
+    app.include_router(groups.router, prefix="/api/v1")
     app.include_router(instruments.router, prefix="/api/v1")
     app.include_router(ws_route.router)  # mounts /ws at root
 

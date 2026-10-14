@@ -15,12 +15,14 @@ Multi-tenant **stock paper-trading** service built on [Nautilus Trader](https://
 - **Order execution** — market and limit orders with simulated fills via Nautilus Trader's matching engine
 - **Position & cash ledgering** — real-time P&L, average cost, realized gains
 - **Real-time streaming** — WebSocket endpoint (`/ws`) pushes live quotes, order-status, and fill events
-- **Market data** — `SimulatedMarketDataProvider` (deterministic, for dev/tests) and `PolygonMarketDataProvider` (real prices, end-of-day on free tier)
+- **Market data** — `SimulatedMarketDataProvider` (deterministic, for dev/tests), `PolygonMarketDataProvider` (real prices, end-of-day on free tier), and `FdOpenDataMarketDataProvider` (real daily bars + close-derived quotes from the [fd-open-data-mcp](https://github.com/FindDataTechnology/fd-open-data-mcp) ontology)
+- **Quant strategies** - dual-track authoring: fixed templates (SMA cross, RSI reversion, Bollinger breakout, MACD cross, DCA) and sandboxed custom code (`on_bar(ctx)`); backtest with equity-curve stats; live paper runs that place attributed signals on your account. Per-user group limits (active strategies, daily orders, custom-code gate, symbol allowlist)
 - **Web UI** — React + TypeScript SPA with professional trading dashboard featuring:
   - **Three-column workspace**: watchlist (live quotes), price chart, and order panel
   - **Click-to-trade**: select any symbol from watchlist to instantly update chart and order form
   - **Position management**: quick close/reduce actions with confirmation dialogs
   - **Daily P&L tracking**: real-time calculation from realized + unrealized components
+  - **Strategies pages**: create/edit strategies (template param form or code editor), run backtests with equity curves, and monitor live paper runs + history
   - **AI Chat Assistant**: conversational interface for placing orders, checking accounts, and managing trades
   - **Typeahead symbol search**, interactive charts (TradingView `lightweight-charts`), and live streaming
 
@@ -55,6 +57,24 @@ uv run fd-trade
 ```
 
 > **Note:** On macOS with Homebrew, `postgresql@14` may run on port 5433 if 5432 is occupied. Adjust `DATABASE_URL` in `.env` accordingly.
+
+> **Admin bootstrap:** to manage user groups (custom-code access, symbol allowlists, limits), set `FD_ADMIN_EMAILS=you@example.com` in `.env` and register with that email - the account is promoted to admin. Admins manage groups at `POST /api/v1/groups` and assign users at `POST /api/v1/users/{id}/group`.
+
+### fd-open-data market data (optional)
+
+To trade/backtest on real daily bars from the [fd-open-data-mcp](https://github.com/FindDataTechnology/fd-open-data-mcp) ontology instead of simulated quotes:
+
+```bash
+# One-time bootstrap of the ontology DB (migrate, catalog import, concepts,
+# bindings, entity seeds). Set FD_OPEN_DATA_MCP_DATABASE_URL to override the
+# default sqlite location.
+uv run python scripts/setup_fd_open_data.py
+
+# Then select the provider
+MARKET_DATA_PROVIDER=fd-open-data uv run fd-trade
+```
+
+The bootstrap prints a coverage report mapping the curated symbol universe to ontology entity IDs; unresolved symbols return no bars/quotes until the ontology seeds them (e.g. via the library's `migrate-astock-daily` or entity import commands).
 
 ### Development
 

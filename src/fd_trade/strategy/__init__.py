@@ -1,0 +1,74 @@
+"""Strategy core: spec models, indicators, evaluation contract, templates.
+
+The live runner (``PaperRunSupervisor``) is imported lazily: it pulls in the
+execution + persistence (SQLAlchemy) stack, which the custom-code sandbox
+subprocess must not pay for on every per-bar spawn. Import it via
+``from fd_trade.strategy.runner import PaperRunSupervisor`` (the app does this)
+or access ``fd_trade.strategy.PaperRunSupervisor`` (resolved on first use).
+"""
+
+from .backtester import (
+    BacktestResult,
+    BarEvaluator,
+    EvaluationError,
+    build_evaluator,
+    compute_stats,
+    replay,
+)
+from .ctx import Signal, StrategyContext
+from .codegen import CodeValidationError, validate_source, validate_source_strict
+from .spec import (
+    CodeSpec,
+    SpecValidationError,
+    StrategySpec,
+    TemplateSpec,
+    spec_summary,
+    validate_spec,
+)
+from .templates import (
+    CATALOG,
+    TemplateValidationError,
+    list_templates,
+    make_evaluator,
+    validate_template_params,
+)
+
+
+def __getattr__(name: str):
+    if name == "PaperRunSupervisor":
+        from .runner import PaperRunSupervisor
+
+        globals()[name] = PaperRunSupervisor  # cache
+        return PaperRunSupervisor
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(list(globals().keys()) + ["PaperRunSupervisor"])
+
+
+__all__ = [
+    "Signal",
+    "StrategyContext",
+    "PaperRunSupervisor",
+    "BacktestResult",
+    "BarEvaluator",
+    "EvaluationError",
+    "build_evaluator",
+    "compute_stats",
+    "replay",
+    "CodeSpec",
+    "SpecValidationError",
+    "StrategySpec",
+    "TemplateSpec",
+    "spec_summary",
+    "validate_spec",
+    "CATALOG",
+    "TemplateValidationError",
+    "list_templates",
+    "make_evaluator",
+    "validate_template_params",
+    "CodeValidationError",
+    "validate_source",
+    "validate_source_strict",
+]

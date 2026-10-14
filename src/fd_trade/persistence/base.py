@@ -24,11 +24,16 @@ class Database:
     session_factory: async_sessionmaker[AsyncSession]
 
 
-def create_database(database_url: str) -> Database:
+def create_database(
+    database_url: str,
+    pool_size: int | None = None,
+    max_overflow: int | None = None,
+) -> Database:
     """Create a ``Database`` bound to ``database_url``.
 
     SQLite (used for tests/dev) needs ``check_same_thread=False`` and a
-    ``StaticPool`` so an in-memory database survives across sessions.
+    ``StaticPool`` so an in-memory database survives across sessions. Pool
+    sizing applies only to Postgres.
     """
     is_sqlite = database_url.startswith("sqlite")
     connect_args: dict = {}
@@ -36,6 +41,11 @@ def create_database(database_url: str) -> Database:
     if is_sqlite:
         connect_args["check_same_thread"] = False
         kwargs["poolclass"] = StaticPool
+    else:
+        if pool_size is not None:
+            kwargs["pool_size"] = pool_size
+        if max_overflow is not None:
+            kwargs["max_overflow"] = max_overflow
 
     engine = create_async_engine(
         database_url,

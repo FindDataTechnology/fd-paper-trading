@@ -14,14 +14,22 @@ from sqlalchemy.orm import selectinload
 
 from .models import (
     ACTIVE_ORDER_STATUSES,
+    ACTIVE_RUN_STATUSES,
     Account,
     ApiToken,
     BalanceTransaction,
     Fill,
     Order,
     OrderStatus,
+    OrderType,
     Position,
+    Strategy,
+    StrategyEquityPoint,
+    StrategyEvent,
+    StrategyRun,
+    StrategyRunMode,
     User,
+    UserGroup,
 )
 
 
@@ -87,14 +95,27 @@ class AccountRepository:
         return account
 
     async def get_for_user(
-        self, account_id: uuid.UUID, user_id: uuid.UUID
+        self,
+        account_id: uuid.UUID,
+        user_id: uuid.UUID,
+        *,
+        for_update: bool = False,
+        eager: bool = True,
     ) -> Account | None:
-        """Fetch an account only if it belongs to ``user_id`` (enforces isolation)."""
-        res = await self.session.execute(
-            select(Account)
-            .where(Account.id == account_id, Account.user_id == user_id)
-            .options(selectinload(Account.positions), selectinload(Account.orders))
-        )
+        """Fetch an account only if it belongs to ``user_id`` (enforces isolation).
+
+        ``for_update`` takes a ``FOR UPDATE`` row lock so concurrent order
+        processing on the same account serializes (no lost cash/position
+        updates). ``eager`` (default) also loads positions/orders for views
+        that need them; the order path passes ``eager=False`` since it only
+        reads ``cash_balance``.
+        """
+        stmt = select(Account).where(Account.id == account_id, Account.user_id == user_id)
+        if eager:
+            stmt = stmt.options(selectinload(Account.positions), selectinload(Account.orders))
+        if for_update:
+            stmt = stmt.with_for_update()
+        res = await self.session.execute(stmt)
         return res.scalar_one_or_none()
 
     async def list_for_user(self, user_id: uuid.UUID) -> list[Account]:
@@ -147,14 +168,40 @@ class OrderRepository:
         account_id: uuid.UUID,
         user_id: uuid.UUID,
         status: str | None = None,
+        strategy_run_id: uuid.UUID | None = None,
     ) -> list[Order]:
         stmt = select(Order).where(
             Order.account_id == account_id, Order.user_id == user_id
         )
         if status is not None:
             stmt = stmt.where(Order.status == status)
+        if strategy_run_id is not None:
+            stmt = stmt.where(Order.strategy_run_id == strategy_run_id)
         stmt = stmt.order_by(Order.created_at.desc()).options(selectinload(Order.fills))
         res = await self.session.execute(stmt)
+        return list(res.scalars().all())
+
+    async def count_for_run(self, run_id: uuid.UUID, since: datetime) -> int:
+        """Orders placed by ``run_id`` since ``since`` (daily order cap)."""
+        res = await self.session.execute(
+            select(Order.id).where(
+                Order.strategy_run_id == run_id, Order.created_at >= since
+            )
+        )
+        return len(res.all())
+
+    async def list_active_for_run(self, run_id: uuid.UUID) -> list[Order]:
+        """Non-terminal orders of a run, oldest first (stop cancels LIMITs)."""
+        res = await self.session.execute(
+            select(Order)
+            .where(
+                Order.strategy_run_id == run_id,
+                Order.order_type == OrderType.LIMIT,
+                Order.status.in_(ACTIVE_ORDER_STATUSES),
+            )
+            .options(selectinload(Order.fills))
+            .order_by(Order.created_at.asc())
+        )
         return list(res.scalars().all())
 
 
@@ -196,5 +243,153 @@ class FillRepository:
             .join(Account, Account.id == Fill.account_id)
             .where(Account.id == account_id, Account.user_id == user_id)
             .order_by(Fill.ts.desc())
+        )
+        return list(res.scalars().all())
+
+
+class UserGroupRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(self, name: str, config: dict) -> UserGroup:
+        group = UserGroup(name=name, config=config)
+        self.session.add(group)
+        await self.session.flush()
+        return group
+
+    async def get_by_id(self, group_id: uuid.UUID) -> UserGroup | None:
+        return await self.session.get(UserGroup, group_id)
+
+    async def get_by_name(self, name: str) -> UserGroup | None:
+        res = await self.session.execute(
+            select(UserGroup).where(UserGroup.name == name)
+        )
+        return res.scalar_one_or_none()
+
+    async def list_all(self) -> list[UserGroup]:
+        res = await self.session.execute(select(UserGroup).order_by(UserGroup.name.asc()))
+        return list(res.scalars().all())
+
+
+class StrategyRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(self, strategy: Strategy) -> Strategy:
+        self.session.add(strategy)
+        await self.session.flush()
+        return strategy
+
+    async def get_for_user(
+        self, strategy_id: uuid.UUID, user_id: uuid.UUID
+    ) -> Strategy | None:
+        res = await self.session.execute(
+            select(Strategy).where(
+                Strategy.id == strategy_id, Strategy.user_id == user_id
+            )
+        )
+        return res.scalar_one_or_none()
+
+    async def list_for_user(self, user_id: uuid.UUID) -> list[Strategy]:
+        res = await self.session.execute(
+            select(Strategy)
+            .where(Strategy.user_id == user_id)
+            .order_by(Strategy.created_at.desc())
+        )
+        return list(res.scalars().all())
+
+    async def delete(self, strategy: Strategy) -> None:
+        await self.session.delete(strategy)
+        await self.session.flush()
+
+
+class StrategyRunRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(self, run: StrategyRun) -> StrategyRun:
+        self.session.add(run)
+        await self.session.flush()
+        return run
+
+    async def get_for_user(
+        self, run_id: uuid.UUID, user_id: uuid.UUID
+    ) -> StrategyRun | None:
+        # Join via Strategy to enforce ownership without a separate lookup.
+        res = await self.session.execute(
+            select(StrategyRun)
+            .join(Strategy, Strategy.id == StrategyRun.strategy_id)
+            .where(StrategyRun.id == run_id, Strategy.user_id == user_id)
+        )
+        return res.scalar_one_or_none()
+
+    async def list_for_user(
+        self,
+        user_id: uuid.UUID,
+        strategy_id: uuid.UUID | None = None,
+        mode: str | None = None,
+        status: str | None = None,
+    ) -> list[StrategyRun]:
+        stmt = (
+            select(StrategyRun)
+            .join(Strategy, Strategy.id == StrategyRun.strategy_id)
+            .where(Strategy.user_id == user_id)
+        )
+        if strategy_id is not None:
+            stmt = stmt.where(StrategyRun.strategy_id == strategy_id)
+        if mode is not None:
+            stmt = stmt.where(StrategyRun.mode == mode)
+        if status is not None:
+            stmt = stmt.where(StrategyRun.status == status)
+        stmt = stmt.order_by(StrategyRun.created_at.desc())
+        res = await self.session.execute(stmt)
+        return list(res.scalars().all())
+
+    async def list_active(self, mode: str | None = None) -> list[StrategyRun]:
+        """All non-terminal runs (used for runner recovery on startup)."""
+        stmt = select(StrategyRun).where(StrategyRun.status.in_(ACTIVE_RUN_STATUSES))
+        if mode is not None:
+            stmt = stmt.where(StrategyRun.mode == mode)
+        res = await self.session.execute(stmt)
+        return list(res.scalars().all())
+
+    async def count_active_paper_for_user(self, user_id: uuid.UUID) -> int:
+        """Running paper runs owned by ``user_id`` (max_active_strategies)."""
+        res = await self.session.execute(
+            select(StrategyRun.id)
+            .join(Strategy, Strategy.id == StrategyRun.strategy_id)
+            .where(
+                Strategy.user_id == user_id,
+                StrategyRun.mode == StrategyRunMode.PAPER,
+                StrategyRun.status.in_(ACTIVE_RUN_STATUSES),
+            )
+        )
+        return len(res.all())
+
+    async def add_equity_points(self, points: list[StrategyEquityPoint]) -> None:
+        self.session.add_all(points)
+        await self.session.flush()
+
+    async def list_equity_points(self, run_id: uuid.UUID) -> list[StrategyEquityPoint]:
+        res = await self.session.execute(
+            select(StrategyEquityPoint)
+            .where(StrategyEquityPoint.run_id == run_id)
+            .order_by(StrategyEquityPoint.date.asc())
+        )
+        return list(res.scalars().all())
+
+    async def add_event(
+        self, run_id: uuid.UUID, type: str, message: str, data: dict | None = None
+    ) -> StrategyEvent:
+        event = StrategyEvent(run_id=run_id, type=type, message=message, data=data)
+        self.session.add(event)
+        await self.session.flush()
+        return event
+
+    async def list_events(self, run_id: uuid.UUID) -> list[StrategyEvent]:
+        res = await self.session.execute(
+            select(StrategyEvent)
+            .where(StrategyEvent.run_id == run_id)
+            .order_by(StrategyEvent.ts.asc())
         )
         return list(res.scalars().all())

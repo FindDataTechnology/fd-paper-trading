@@ -41,7 +41,11 @@ async def place_order(
     session: AsyncSession = Depends(get_session),
     exec_service: PaperExecutionService = Depends(_execution_service),
 ) -> OrderOut:
-    account = await AccountRepository(session).get_for_user(payload.account_id, user.id)
+    # FOR UPDATE serializes concurrent orders on the same account (the ledger
+    # read-modify-writes cash/positions); no eager loads needed here.
+    account = await AccountRepository(session).get_for_user(
+        payload.account_id, user.id, for_update=True, eager=False
+    )
     if account is None:
         raise APIError("not_found", "Account not found", 404)
     try:
@@ -56,7 +60,8 @@ async def place_order(
             payload.client_order_id,
         )
     except OrderRejected as exc:
-        raise APIError(exc.code, exc.message, 400) from exc
+        status_code = 429 if exc.code == "rate_limited" else 400
+        raise APIError(exc.code, exc.message, status_code) from exc
     await session.commit()
     # Re-fetch so fills are eager-loaded for the response (fills were added via
     # FK after the order was created, so the in-memory collection is not populated).

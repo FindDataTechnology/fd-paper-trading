@@ -1,0 +1,53 @@
+# market-data Specification (delta)
+
+## MODIFIED Requirements
+
+### Requirement: MarketDataProvider interface
+
+The system SHALL define a `MarketDataProvider` abstraction with these operations: `get_quote(symbol) -> Quote | None` (async), `get_instrument(symbol) -> Instrument | None`, `search_instruments(query)`, and `get_bars(symbol, timeframe, limit)`. A `Quote` SHALL carry `instrument_id`, `bid`, `ask`, and `ts_event`. `get_quote` returning `None` SHALL signify a data gap (no live quote available). The provider is selected at app startup from `MARKET_DATA_PROVIDER` (`simulated` | `polygon` | `fd-open-data`).
+
+#### Scenario: Quote carries bid and ask
+- **WHEN** the provider returns a quote for a symbol
+- **THEN** the quote has a `bid`, an `ask`, and an `instrument_id`
+
+#### Scenario: Data gap signaled as None
+- **WHEN** no quote is available for a symbol
+- **THEN** `get_quote` returns `None`
+
+### Requirement: Provider is swappable
+
+The market-data layer SHALL expose a single interface so the simulated, Polygon, and fd-open-data providers are interchangeable, and a real-time provider (e.g. Databento NBBO) can be added later without changing consumers. Selection SHALL be via the `MARKET_DATA_PROVIDER` environment variable.
+
+#### Scenario: Selecting the provider at startup
+- **WHEN** `MARKET_DATA_PROVIDER=polygon` (with a key)
+- **THEN** the app uses `PolygonMarketDataProvider`
+- **AND WHEN** `MARKET_DATA_PROVIDER=fd-open-data`
+- **THEN** the app uses `FdOpenDataMarketDataProvider`
+- **AND WHEN** `MARKET_DATA_PROVIDER=simulated` (or unset/unknown)
+- **THEN** the app uses `SimulatedMarketDataProvider`
+
+## ADDED Requirements
+
+### Requirement: fd-open-data provider (real daily bars and latest-close quotes)
+
+The `FdOpenDataMarketDataProvider` SHALL be backed by the `fd-open-data-mcp` package imported as a library (in-process; no MCP client). `get_bars(symbol, "1d", limit)` SHALL return real historical daily OHLCV bars loaded through a bulk range read (`read_range`) — one upstream range call per concept, not one dispatch per date. `get_quote(symbol)` SHALL derive a quote from the latest available daily close with a synthetic half-spread (5 bps each side, `$0.01` floor — the same derivation as the Polygon provider), returning `None` when no close is available (data gap). `get_instrument` SHALL keep the SIM equity universe; `search_instruments` SHALL resolve entities through `fd-open-data-mcp`'s entity identifiers with fallback to the curated universe. Timeframes other than `1d` are unsupported by this provider.
+
+#### Scenario: Real daily bars served
+- **WHEN** `get_bars("AAPL", "1d", 500)` is called and the fd-open-data store has that range cached/fetchable
+- **THEN** it returns real historical daily bars in chronological order (not a synthesized random walk)
+
+#### Scenario: Quote derived from latest close
+- **WHEN** the latest daily close for a symbol is `c`
+- **THEN** `get_quote` returns `bid < c < ask` with `bid != ask`
+
+#### Scenario: No data is a gap
+- **WHEN** the fd-open-data store has no close for a symbol
+- **THEN** `get_quote` returns `None`
+
+### Requirement: One price world for backtest, live, and manual fills
+
+When `MARKET_DATA_PROVIDER=fd-open-data`, the same provider instance SHALL feed strategy backtests (historical daily bars), live strategy ticks (latest bar), and order fills (quote). Consumers SHALL NOT mix price series across providers within one app process.
+
+#### Scenario: Backtest and fills share the series
+- **WHEN** a strategy is backtested and its signals reference bar closes
+- **THEN** manual and live orders on the same symbol fill against quotes derived from that same series' closes

@@ -25,6 +25,9 @@ dependencies = [
     "nautilus_trader>=1.200.0",
     "requests>=2.31",
     "fastmcp>=2.5.3",
+    # Library import of the user's open-data MCP (read_range bulk series API
+    # landed in 0.4.4 — required by the fd-open-data market-data provider).
+    "fd-open-data-mcp>=0.4.4",
 ]
 
 [project.scripts]
@@ -53,3 +56,9 @@ filterwarnings = [
 
 [tool.uv]
 package = true
+
+# Dev-loop source: consume the sibling checkout until 0.4.4 (with read_range)
+# is published to PyPI — then this table can be dropped and the >=0.4.4 pin
+# above resolves from the index directly.
+[tool.uv.sources]
+fd-open-data-mcp = { path = "/Users/chengsishi/finddata/fd-open-data-mcp", editable = true }

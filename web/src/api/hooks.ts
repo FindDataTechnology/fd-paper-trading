@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
+import { ACTIVE_RUN_STATUSES } from "./types";
 import type {
   AccountOut,
   AccountSummary,
@@ -8,6 +9,14 @@ import type {
   OrderCreate,
   OrderOut,
   PositionOut,
+  StrategyCreate,
+  StrategyOut,
+  StrategyRunDetailOut,
+  StrategyRunOut,
+  StrategyTemplateOut,
+  StrategyUpdate,
+  BacktestRequest,
+  PaperRunRequest,
 } from "./types";
 
 export const qk = {
@@ -19,6 +28,12 @@ export const qk = {
   order: (id: string) => ["order", id] as const,
   search: (q: string) => ["instruments", q] as const,
   bars: (symbol: string, tf: string) => ["bars", symbol, tf] as const,
+  strategies: ["strategies"] as const,
+  strategy: (id: string) => ["strategy", id] as const,
+  templates: ["strategy-templates"] as const,
+  runs: (strategyId?: string) =>
+    ["strategy-runs", strategyId ?? "all"] as const,
+  run: (id: string) => ["strategy-run", id] as const,
 };
 
 export function useAccounts() {
@@ -147,5 +162,120 @@ export function useResetAccount() {
       qc.invalidateQueries({ queryKey: ["positions"] });
       qc.invalidateQueries({ queryKey: ["orders"] });
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Strategies
+// ---------------------------------------------------------------------------
+
+export function useStrategies() {
+  return useQuery({
+    queryKey: qk.strategies,
+    queryFn: () => api.get<StrategyOut[]>("/strategies").then((r) => r.data),
+  });
+}
+
+export function useStrategy(id: string | null) {
+  return useQuery({
+    queryKey: id ? qk.strategy(id) : ["strategy", "none"],
+    queryFn: () => api.get<StrategyOut>(`/strategies/${id}`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
+export function useStrategyTemplates() {
+  return useQuery({
+    queryKey: qk.templates,
+    queryFn: () =>
+      api.get<StrategyTemplateOut[]>("/strategy-templates").then((r) => r.data),
+  });
+}
+
+export function useCreateStrategy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: StrategyCreate) =>
+      api.post<StrategyOut>("/strategies", payload).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.strategies }),
+  });
+}
+
+export function useUpdateStrategy(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: StrategyUpdate) =>
+      api.patch<StrategyOut>(`/strategies/${id}`, payload).then((r) => r.data),
+    onSuccess: (data) => {
+      qc.setQueryData(qk.strategy(id), data);
+      qc.invalidateQueries({ queryKey: qk.strategies });
+      qc.invalidateQueries({ queryKey: ["strategy-runs"] });
+    },
+  });
+}
+
+export function useDeleteStrategy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.delete(`/strategies/${id}`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.strategies }),
+  });
+}
+
+export function useStrategyRuns(strategyId?: string) {
+  return useQuery({
+    queryKey: qk.runs(strategyId),
+    queryFn: () =>
+      api
+        .get<StrategyRunOut[]>("/strategy-runs", {
+          params: strategyId ? { strategy_id: strategyId } : undefined,
+        })
+        .then((r) => r.data),
+  });
+}
+
+export function useStrategyRun(id: string | null) {
+  return useQuery({
+    queryKey: id ? qk.run(id) : ["strategy-run", "none"],
+    queryFn: () =>
+      api.get<StrategyRunDetailOut>(`/strategy-runs/${id}`).then((r) => r.data),
+    enabled: !!id,
+    // Poll while a run is still active (backtest/paper in progress).
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status && ACTIVE_RUN_STATUSES.includes(status) ? 1500 : false;
+    },
+  });
+}
+
+export function useStartBacktest(strategyId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: BacktestRequest) =>
+      api
+        .post<StrategyRunOut>(`/strategies/${strategyId}/backtests`, payload)
+        .then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["strategy-runs"] }),
+  });
+}
+
+export function useStartPaperRun(strategyId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: PaperRunRequest) =>
+      api
+        .post<StrategyRunOut>(`/strategies/${strategyId}/runs`, payload)
+        .then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["strategy-runs"] }),
+  });
+}
+
+export function useStopPaperRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: string) =>
+      api.post<StrategyRunOut>(`/strategy-runs/${runId}/stop`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["strategy-runs"] }),
   });
 }

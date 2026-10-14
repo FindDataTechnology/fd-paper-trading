@@ -1,6 +1,7 @@
 """FastAPI dependencies for authentication and per-request sessions."""
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -80,10 +81,25 @@ async def _user_from_api_token(session: AsyncSession, token: str) -> User | None
     stored = await repo.get_by_hash(hash_api_token(token))
     if stored is None or stored.revoked_at is not None:
         return None
-    await repo.touch(stored)
+    # last_used_at is only a diagnostics field; rewrite it at most every
+    # N minutes so high-frequency API-token traffic isn't a write per request.
+    last = stored.last_used_at
+    if last is None or datetime.now(timezone.utc) - last > timedelta(
+        minutes=get_settings().api_token_touch_minutes
+    ):
+        await repo.touch(stored)
     return await UserRepository(session).get_by_id(stored.user_id)
 
 
 def require_user(user: User = Depends(get_current_user)) -> User:
     """Convenience alias for routes that only need an authenticated user."""
+    return user
+
+
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    """Require an admin user (403 otherwise)."""
+    if not user.is_admin:
+        from ..api.errors import APIError
+
+        raise APIError("forbidden", "Admin access required", 403)
     return user

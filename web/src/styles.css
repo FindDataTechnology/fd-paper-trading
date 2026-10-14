@@ -77,3 +77,149 @@ th { color: var(--muted); font-weight: 600; }
 
 .error-text { color: var(--red); font-size: 13px; }
 .warning-text { color: #f59e0b; font-size: 13px; }
+
+/* ---- Mobile H5 shell (/m route) ----
+   Auto-adapts: portrait -> bottom tab bar + single column;
+   landscape / tablet (>=768px) -> left side rail. */
+
+.m-shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+
+.m-topbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.m-topbar .m-brand { font-weight: 700; font-size: 14px; white-space: nowrap; }
+.m-topbar .m-account { font-size: 13px; }
+.m-topbar .m-account select { max-width: 38vw; }
+.m-topbar .m-equity { margin-left: auto; text-align: right; line-height: 1.2; white-space: nowrap; }
+.m-topbar .m-equity .label { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+.m-topbar .m-equity .val { font-size: 15px; font-weight: 600; }
+
+.m-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+
+.m-tabbar {
+  flex-shrink: 0;
+  display: flex;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  z-index: 30;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+.m-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 56px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 6px 2px;
+}
+.m-tab .m-tab-icon { font-size: 18px; line-height: 1; }
+.m-tab.active { color: var(--accent); }
+
+.m-content {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px;
+  padding-bottom: calc(76px + env(safe-area-inset-bottom, 0));
+}
+
+.m-list { display: flex; flex-direction: column; gap: 8px; }
+.m-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+.m-row { display: flex; align-items: center; gap: 8px; }
+.m-row .m-grow { flex: 1; min-width: 0; }
+.m-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.m-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.m-chip {
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+.m-chip.active { border-color: var(--accent); color: var(--accent); }
+.m-empty { color: var(--muted); padding: 24px 8px; text-align: center; font-size: 14px; }
+.m-section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 4px 0; }
+
+.m-symbolsearch { position: relative; }
+.m-symbolsearch .m-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin-top: 4px;
+  max-height: 280px;
+  overflow: auto;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.m-symbolsearch .m-result {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  text-align: left;
+  border-radius: 0;
+}
+.m-symbolsearch .m-result:last-child { border-bottom: none; }
+
+.m-btn-block { width: 100%; min-height: 44px; }
+.m-btn-sm { font-size: 12px; padding: 6px 10px; min-height: 36px; }
+
+/* Landscape / tablet: side rail instead of bottom bar. */
+@media (min-width: 768px) {
+  .m-body { flex-direction: row; }
+  .m-tabbar {
+    position: static;
+    flex-direction: column;
+    width: 88px;
+    height: auto;
+    border-top: none;
+    border-right: 1px solid var(--border);
+    padding-bottom: 0;
+  }
+  .m-tab { min-height: 64px; }
+  .m-content { padding: 16px; padding-bottom: 16px; }
+  .m-topbar .m-account select { max-width: 220px; }
+}
+
+/* Very narrow phones: drop the brand to keep the top bar on one line. */
+@media (max-width: 380px) {
+  .m-topbar .m-brand { display: none; }
+}

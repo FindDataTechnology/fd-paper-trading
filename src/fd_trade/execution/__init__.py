@@ -1,6 +1,6 @@
-"""Simulated execution via Nautilus's matching engine."""
+"""Simulated execution: pure-Python SIM fill calculator + Postgres ledger."""
 
-from .fill_engine import FillResult, NautilusFillEngine
+from .fill_engine import FillResult, SimFillEngine
 from .service import OrderRejected, PaperExecutionService
 
-__all__ = ["FillResult", "NautilusFillEngine", "OrderRejected", "PaperExecutionService"]
+__all__ = ["FillResult", "SimFillEngine", "OrderRejected", "PaperExecutionService"]

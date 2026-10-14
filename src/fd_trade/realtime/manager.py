@@ -80,8 +80,8 @@ class ConnectionManager:
         """Send ``event`` to every connection owned by ``user_id``."""
         async with self._lock:
             targets = [c for c in self._connections if c.user_id == user_id]
-        for conn in targets:
-            await self._safe_send(conn, event)
+        if targets:
+            await asyncio.gather(*(self._safe_send(c, event) for c in targets))
 
     async def _safe_send(self, conn: ClientConnection, event: dict) -> None:
         try:
@@ -119,8 +119,9 @@ class ConnectionManager:
                 "ask": ask,
                 "ts": int(time.time()),
             }
-            for conn in conns:
-                await self._safe_send(conn, event)
+            # Fan out concurrently so one slow/stalled client can't delay the
+            # rest of the tick cycle.
+            await asyncio.gather(*(self._safe_send(conn, event) for conn in conns))
 
     def _wobble(self, symbol: str, quote) -> tuple[str, str]:
         """Apply a small deterministic wobble around the quote mid.

@@ -22,7 +22,7 @@ interface LastBar {
   close: number;
 }
 
-export default function PriceChart({ symbol }: { symbol: string }) {
+export default function PriceChart({ symbol, height = 380 }: { symbol: string; height?: number }) {
   const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("5m");
   const [chartType, setChartType] = useState<"candle" | "line">("candle");
   const { data: bars, isFetching } = useBars(symbol, timeframe);
@@ -50,7 +50,7 @@ export default function PriceChart({ symbol }: { symbol: string }) {
       rightPriceScale: { borderColor: "#2a2f3a" },
       timeScale: { borderColor: "#2a2f3a" },
       width: el.clientWidth,
-      height: 380,
+      height,
     });
     chartRef.current = chart;
 

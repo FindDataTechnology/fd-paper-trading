@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../store/auth";
 import AccountSwitcher from "./AccountSwitcher";
 import SymbolSearch from "./SymbolSearch";
@@ -31,11 +31,15 @@ export default function Layout() {
             Dashboard
           </NavLink>
           <NavLink to="/orders">Orders</NavLink>
+          <NavLink to="/strategies">Strategies</NavLink>
         </nav>
         <div style={{ flex: 1, minWidth: 220, maxWidth: 360 }}>
           <SymbolSearch />
         </div>
         <AccountSwitcher />
+        <Link to="/m" className="muted" style={{ fontSize: 13 }}>
+          Mobile
+        </Link>
         <button className="secondary" onClick={handleLogout}>
           Log out
         </button>

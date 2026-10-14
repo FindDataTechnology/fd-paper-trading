@@ -2,6 +2,14 @@ import { create } from "zustand";
 import { useEffect } from "react";
 import type { OrderOut, Quote } from "../api/types";
 
+export interface StrategyEventPayload {
+  run_id: string;
+  strategy_id: string;
+  type: string;
+  message: string;
+  data: Record<string, unknown>;
+}
+
 type Status = "idle" | "connecting" | "open" | "closed";
 
 // ---- Pure helpers (unit-tested) ----
@@ -24,6 +32,13 @@ export function applyQuote(
 export function isOrderEvent(msg: unknown): msg is { type: "order"; order: OrderOut } {
   const m = msg as { type?: string; order?: unknown };
   return m?.type === "order" && !!m?.order;
+}
+
+export function isStrategyEvent(
+  msg: unknown
+): msg is { type: "strategy_event"; event: StrategyEventPayload } {
+  const m = msg as { type?: string; event?: unknown };
+  return m?.type === "strategy_event" && !!m?.event;
 }
 
 /** Ref-counted subscription map delta. Returns a new Map. */
@@ -62,10 +77,13 @@ interface RealtimeState {
   subscribe: (symbol: string) => () => void;
   /** Register a callback for the user's order/fill events. */
   onOrder: (cb: (o: OrderOut) => void) => () => void;
+  /** Register a callback for the user's strategy run events. */
+  onStrategyEvent: (cb: (e: StrategyEventPayload) => void) => () => void;
   // internal
   _ws: WebSocket | null;
   _subs: Map<string, number>;
   _orderCbs: Set<(o: OrderOut) => void>;
+  _strategyCbs: Set<(e: StrategyEventPayload) => void>;
   _token: string | null;
   _reconnect: number | null;
   _attempts: number;
@@ -105,6 +123,10 @@ export const useRealtime = create<RealtimeState>((set, get) => {
       }
       if (isOrderEvent(msg)) {
         for (const cb of get()._orderCbs) cb(msg.order);
+        return;
+      }
+      if (isStrategyEvent(msg)) {
+        for (const cb of get()._strategyCbs) cb(msg.event);
         return;
       }
       if ((msg as { type?: string })?.type === "quote") {
@@ -179,9 +201,16 @@ export const useRealtime = create<RealtimeState>((set, get) => {
         get()._orderCbs.delete(cb);
       };
     },
+    onStrategyEvent: (cb) => {
+      get()._strategyCbs.add(cb);
+      return () => {
+        get()._strategyCbs.delete(cb);
+      };
+    },
     _ws: null,
     _subs: new Map(),
     _orderCbs: new Set(),
+    _strategyCbs: new Set(),
     _token: null,
     _reconnect: null,
     _attempts: 0,
@@ -203,4 +232,10 @@ export function useQuote(symbol: string | null): Quote | undefined {
 export function useOrderEvents(cb: (o: OrderOut) => void): void {
   const onOrder = useRealtime((s) => s.onOrder);
   useEffect(() => onOrder(cb), [cb, onOrder]);
+}
+
+/** Register a callback for the user's strategy run events (live /ws). */
+export function useStrategyEvents(cb: (e: StrategyEventPayload) => void): void {
+  const onStrategyEvent = useRealtime((s) => s.onStrategyEvent);
+  useEffect(() => onStrategyEvent(cb), [cb, onStrategyEvent]);
 }

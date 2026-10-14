@@ -114,3 +114,130 @@ export const ACTIVE_ORDER_STATUSES = [
   "OPEN",
   "PARTIALLY_FILLED",
 ];
+
+// ---------------------------------------------------------------------------
+// Strategies (quant-strategies spec). Decimals/dates arrive as JSON strings.
+// ---------------------------------------------------------------------------
+
+/** A template's params are a JSON Schema object (type/properties/required/...). */
+export interface JsonSchema {
+  type?: string;
+  properties?: Record<string, JsonSchemaProp>;
+  required?: string[];
+  additionalProperties?: boolean;
+}
+
+export interface JsonSchemaProp {
+  type?: string;
+  minimum?: number;
+  maximum?: number;
+  default?: number | string | boolean | null;
+  description?: string;
+}
+
+/** Template kind: a fixed strategy with a validated params schema. */
+export interface TemplateSpec {
+  kind: "template";
+  template: string;
+  symbol: string;
+  params?: Record<string, number | string>;
+}
+
+/** Code kind: free-form LLM/user Python conforming to the on_bar(ctx) contract. */
+export interface CodeSpec {
+  kind: "code";
+  symbol: string;
+  source: string;
+}
+
+export type StrategySpec = TemplateSpec | CodeSpec;
+
+export interface StrategyOut {
+  id: string;
+  name: string;
+  description: string | null;
+  spec: StrategySpec;
+  spec_summary: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StrategyTemplateOut {
+  id: string;
+  name: string;
+  description: string;
+  params_schema: JsonSchema;
+}
+
+export interface StrategyCreate {
+  name: string;
+  description?: string | null;
+  spec: StrategySpec;
+}
+
+export interface StrategyUpdate {
+  name?: string;
+  description?: string | null;
+  spec?: StrategySpec;
+}
+
+export interface BacktestRequest {
+  start: string; // ISO date
+  end: string; // ISO date
+  initial_cash?: string;
+}
+
+export interface PaperRunRequest {
+  account_id: string;
+}
+
+/** Run statuses mirrored from the backend runner state machine. */
+export type StrategyRunStatus =
+  | "QUEUED"
+  | "STARTING"
+  | "RUNNING"
+  | "COMPLETED"
+  | "STOPPED"
+  | "FAILED"
+  | "ERROR";
+
+export const ACTIVE_RUN_STATUSES: StrategyRunStatus[] = [
+  "QUEUED",
+  "STARTING",
+  "RUNNING",
+];
+
+export interface StrategyRunOut {
+  id: string;
+  strategy_id: string;
+  strategy_version: number;
+  mode: string; // "BACKTEST" | "PAPER"
+  account_id: string | null;
+  status: StrategyRunStatus;
+  params: Record<string, unknown> | null;
+  stats: Record<string, number> | null;
+  error: string | null;
+  started_at: string | null;
+  stopped_at: string | null;
+  created_at: string;
+}
+
+export interface EquityPointOut {
+  date: string; // ISO date
+  equity: string; // Decimal as string
+}
+
+export interface StrategyEventOut {
+  id: string;
+  run_id: string;
+  ts: string;
+  type: string;
+  message: string;
+  data: Record<string, unknown> | null;
+}
+
+export interface StrategyRunDetailOut extends StrategyRunOut {
+  equity_points: EquityPointOut[];
+  events: StrategyEventOut[];
+}

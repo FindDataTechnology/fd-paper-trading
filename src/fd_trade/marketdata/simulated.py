@@ -1,12 +1,13 @@
 """Deterministic simulated market-data provider for tests and local dev."""
 
+from __future__ import annotations
+
 import hashlib
 import random
 import time
 from decimal import Decimal
-
-from nautilus_trader.model.instruments import Instrument
-from nautilus_trader.test_kit.providers import TestInstrumentProvider
+from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from .provider import (
     Bar,
@@ -15,6 +16,13 @@ from .provider import (
     Quote,
     SUPPORTED_TIMEFRAMES,
 )
+
+if TYPE_CHECKING:
+    # Annotation-only; the runtime TestInstrumentProvider import is deferred
+    # into _instrument() so importing this module never pulls in nautilus_trader
+    # (keeps sandbox subprocess spawn cheap; the SIM provider is the default
+    # in tests, so this is the hottest import to keep light).
+    from nautilus_trader.model.instruments import Instrument
 
 SIM_VENUE = "SIM"
 
@@ -63,8 +71,17 @@ class SimulatedMarketDataProvider(MarketDataProvider):
             ask=base + Decimal("0.05"),
         )
 
-    def get_instrument(self, symbol: str) -> Instrument | None:
+    @staticmethod
+    @lru_cache(maxsize=256)
+    def _instrument(symbol: str) -> Instrument:
+        # Instruments sit on the order hot path; building one per call is waste.
+        # Deferred import so module import stays nautilus-free (see header).
+        from nautilus_trader.test_kit.providers import TestInstrumentProvider
+
         return TestInstrumentProvider.equity(symbol=symbol, venue=SIM_VENUE)
+
+    def get_instrument(self, symbol: str) -> Instrument | None:
+        return self._instrument(symbol)
 
     async def search_instruments(self, q: str) -> list:
         from .provider import InstrumentSearchResult

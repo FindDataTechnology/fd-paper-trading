@@ -1,9 +1,17 @@
 """Market-data provider interface."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
-from nautilus_trader.model.instruments import Instrument
+if TYPE_CHECKING:
+    # Used only as a return-type annotation on get_instrument/search_instruments;
+    # kept under TYPE_CHECKING so importing this module (and the Bar dataclass
+    # used by the sandbox subprocess) never pulls in the heavy nautilus_trader
+    # package. This keeps sandbox subprocess spawn cheap (~tens of ms).
+    from nautilus_trader.model.instruments import Instrument
 
 # Supported bar timeframes for historical OHLCV requests, mapped to their
 # duration in seconds. The set is enforced by the bars endpoint.

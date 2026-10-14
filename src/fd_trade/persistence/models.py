@@ -6,22 +6,30 @@ Postgres and SQLite.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import (
+    JSON,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
 )
+from sqlalchemy.dialects.postgresql import JSONB as _PG_JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
+
+# Postgres stores JSONB; SQLite (tests/dev) degrades to generic JSON.
+JSONB = _PG_JSONB().with_variant(JSON(), "sqlite")
 
 
 def _utcnow() -> datetime:
@@ -59,6 +67,62 @@ ACTIVE_ORDER_STATUSES = (
 )
 
 
+class StrategyRunMode:
+    BACKTEST = "BACKTEST"
+    PAPER = "PAPER"
+
+
+class StrategyRunStatus:
+    # Backtest lifecycle: QUEUED -> RUNNING -> COMPLETED | FAILED
+    QUEUED = "QUEUED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    # Paper lifecycle: STARTING -> RUNNING -> STOPPED | ERROR
+    STARTING = "STARTING"
+    STOPPED = "STOPPED"
+    ERROR = "ERROR"
+    # Shared by both lifecycles.
+    RUNNING = "RUNNING"
+
+
+# Runs holding resources (a background task / supervised runner).
+ACTIVE_RUN_STATUSES = (
+    StrategyRunStatus.QUEUED,
+    StrategyRunStatus.STARTING,
+    StrategyRunStatus.RUNNING,
+)
+
+
+# Fixed id of the seeded ``default`` group (created by the quant-strategies
+# migration). Keep in sync with alembic/versions/7f3a2b91c4d0_*.py.
+DEFAULT_GROUP_ID = uuid.UUID("8f3a6b21-0000-4000-8000-000000000001")
+
+# Fallback limits when a user has no group or a key is missing from config.
+DEFAULT_GROUP_CONFIG = {
+    "max_active_strategies": 3,
+    "max_backtest_days": 730,
+    "max_orders_per_day": 20,
+    "allow_custom_code": False,
+    "allowed_symbols": None,
+}
+
+
+def group_config(user: "User | None", key: str):
+    """Resolve one group-config key for a user, falling back to defaults."""
+    config = user.group.config if user is not None and user.group is not None else {}
+    return config.get(key, DEFAULT_GROUP_CONFIG[key])
+
+
+class UserGroup(Base):
+    __tablename__ = "user_groups"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    # Per-group limits; see DEFAULT_GROUP_CONFIG for the recognized keys.
+    config: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -66,12 +130,20 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user_groups.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
+    group: Mapped["UserGroup | None"] = relationship(lazy="selectin")
     accounts: Mapped[list["Account"]] = relationship(
         back_populates="user", lazy="selectin", cascade="all, delete-orphan"
     )
     tokens: Mapped[list["ApiToken"]] = relationship(
+        back_populates="user", lazy="selectin", cascade="all, delete-orphan"
+    )
+    strategies: Mapped[list["Strategy"]] = relationship(
         back_populates="user", lazy="selectin", cascade="all, delete-orphan"
     )
 
@@ -130,6 +202,11 @@ class Order(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    # Set when the order was placed by a strategy run (live paper or backtest
+    # replay); NULL for manually-placed orders.
+    strategy_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("strategy_runs.id", ondelete="SET NULL"), nullable=True, index=True
     )
     client_order_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     instrument_id: Mapped[str] = mapped_column(String(80), index=True)  # e.g. "AAPL.NASDAQ"
@@ -204,3 +281,125 @@ class BalanceTransaction(Base):
     balance_after: Mapped[Decimal] = mapped_column(Numeric(20, 4))
     reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class Strategy(Base):
+    """A user's strategy definition.
+
+    ``spec`` is the validated strategy spec (template track or code track);
+    editing the spec bumps ``version`` so historical runs pin what they ran.
+    """
+
+    __tablename__ = "strategies"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    spec: Mapped[dict] = mapped_column(JSONB)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    user: Mapped["User"] = relationship(back_populates="strategies")
+    runs: Mapped[list["StrategyRun"]] = relationship(
+        back_populates="strategy", lazy="selectin", cascade="all, delete-orphan"
+    )
+
+
+class StrategyRun(Base):
+    """One execution of a strategy: a backtest or a live paper run.
+
+    Pins ``strategy_version`` at start so later spec edits don't rewrite
+    history. ``params`` holds run-time inputs (backtest window, initial cash,
+    paper account); ``stats`` the computed headline stats on completion.
+    """
+
+    __tablename__ = "strategy_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    strategy_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("strategies.id", ondelete="CASCADE"), index=True
+    )
+    strategy_version: Mapped[int] = mapped_column(Integer)
+    mode: Mapped[str] = mapped_column(String(10))  # BACKTEST / PAPER
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default=StrategyRunStatus.QUEUED, index=True)
+    params: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    stats: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    stopped_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    strategy: Mapped["Strategy"] = relationship(back_populates="runs")
+    equity_points: Mapped[list["StrategyEquityPoint"]] = relationship(
+        back_populates="run", lazy="selectin", cascade="all, delete-orphan"
+    )
+    events: Mapped[list["StrategyEvent"]] = relationship(
+        back_populates="run", lazy="selectin", cascade="all, delete-orphan",
+        order_by="StrategyEvent.ts",
+    )
+
+
+class StrategyEquityPoint(Base):
+    """One equity sample of a run: per bar (backtest) or per day (paper)."""
+
+    __tablename__ = "strategy_equity_points"
+    __table_args__ = (
+        UniqueConstraint("run_id", "date", name="uq_strategy_equity_points_run_date"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("strategy_runs.id", ondelete="CASCADE"), index=True
+    )
+    date: Mapped[date] = mapped_column(Date)
+    equity: Mapped[Decimal] = mapped_column(Numeric(20, 4))
+
+    run: Mapped["StrategyRun"] = relationship(back_populates="equity_points")
+
+
+class StrategyEvent(Base):
+    """One observable event during a strategy run (design D8/task 7.4).
+
+    Persisted so the web UI can show a live-run timeline and history; also
+    broadcast over ``/ws`` to the owning user. ``type`` is one of
+    ``StrategyEventType``; ``data`` carries type-specific detail (order ids,
+    rejection reasons, etc.).
+    """
+
+    __tablename__ = "strategy_events"
+    __table_args__ = (
+        Index("ix_strategy_events_run_ts", "run_id", "ts"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("strategy_runs.id", ondelete="CASCADE"), index=True
+    )
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    type: Mapped[str] = mapped_column(String(20))
+    message: Mapped[str] = mapped_column(Text)
+    data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    run: Mapped["StrategyRun"] = relationship(back_populates="events")
+
+
+class StrategyEventType:
+    """Strategy run event types (broadcast + persisted)."""
+
+    STATE_CHANGE = "state_change"  # run status transition
+    ORDER = "order"                # an order was placed (filled/rejected/...)
+    REJECTION = "rejection"        # a signal was rejected (daily cap, etc.)
+    ERROR = "error"                # a tick failed (logged, run continues)

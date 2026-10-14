@@ -21,11 +21,20 @@ from ...auth.security import (
     verify_password,
 )
 from ...config import get_settings
-from ...persistence.models import User
-from ...persistence.repositories import ApiTokenRepository, UserRepository
+from ...persistence.models import DEFAULT_GROUP_ID, User
+from ...persistence.repositories import (
+    ApiTokenRepository,
+    UserGroupRepository,
+    UserRepository,
+)
 from ..errors import APIError
 
 router = APIRouter(tags=["auth"])
+
+
+def _admin_emails() -> set[str]:
+    raw = get_settings().fd_admin_emails or ""
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
 
 
 @router.post("/auth/register", response_model=UserOut, status_code=201)
@@ -37,6 +46,14 @@ async def register(
     if await repo.get_by_email(payload.email) is not None:
         raise APIError("email_exists", "A user with this email already exists", 409)
     user = await repo.create(payload.email, hash_password(payload.password))
+    # Promote to admin if the email is in FD_ADMIN_EMAILS (design D7).
+    if payload.email.lower() in _admin_emails():
+        user.is_admin = True
+    # Assign the seeded default group if it exists (prod); in tests the group
+    # is absent and group_config falls back to DEFAULT_GROUP_CONFIG.
+    group = await UserGroupRepository(session).get_by_id(DEFAULT_GROUP_ID)
+    if group is not None:
+        user.group_id = group.id
     await session.commit()
     return user
 

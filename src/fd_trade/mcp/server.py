@@ -31,25 +31,29 @@ def _api_call(method: str, endpoint: str, json_data: dict | None = None, params:
             resp = requests.get(url, headers=headers, params=params, timeout=30)
         elif method == "POST":
             resp = requests.post(url, headers=headers, json=json_data, timeout=30)
+        elif method == "PATCH":
+            resp = requests.patch(url, headers=headers, json=json_data, timeout=30)
         elif method == "DELETE":
             resp = requests.delete(url, headers=headers, timeout=30)
         else:
             return False, {"error": True, "code": "invalid_method", "message": f"Unknown HTTP method: {method}"}
 
         resp.raise_for_status()
-        return True, resp.json()
+        return True, resp.json() if resp.content else {}
     except requests.exceptions.HTTPError as e:
+        # Surface the standardized {"error": {code, message, fields}} body so
+        # the LLM can self-repair (e.g. spec validation fields on 422).
+        if e.response is not None:
+            try:
+                body = e.response.json().get("error")
+            except Exception:
+                body = None
+            if isinstance(body, dict):
+                return False, {"error": True, **body}
         status = e.response.status_code if e.response else 500
         if status == 404:
             return False, {"error": True, "code": "not_found", "message": "Resource not found"}
-        elif status == 400:
-            try:
-                detail = e.response.json().get("detail", str(e))
-            except Exception:
-                detail = str(e)
-            return False, {"error": True, "code": "bad_request", "message": detail}
-        else:
-            return False, {"error": True, "code": "api_error", "message": str(e)}
+        return False, {"error": True, "code": "api_error", "message": str(e)}
     except requests.exceptions.RequestException as e:
         return False, {"error": True, "code": "connection_error", "message": str(e)}
 
@@ -156,6 +160,225 @@ def get_account(account_id: str) -> dict:
     success, data = _api_call("GET", f"/api/v1/accounts/{account_id}")
     if success:
         return data
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Strategy tools (template + code tracks, backtests, live paper runs)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+def list_strategy_templates() -> list[dict]:
+    """List the built-in strategy templates with their parameter JSON Schemas.
+
+    Use these to build a template-track strategy spec:
+    {"kind": "template", "template": <id>, "symbol": "AAPL", "params": {...}}.
+
+    Returns:
+        List of {id, name, description, params_schema}. Empty list on error.
+    """
+    success, data = _api_call("GET", "/api/v1/strategy-templates")
+    if success:
+        return data
+    return []
+
+
+@mcp.tool
+def create_strategy(name: str, spec: dict, description: str | None = None) -> dict:
+    """Create a strategy from a spec.
+
+    Args:
+        name: Human-readable strategy name
+        spec: Strategy spec. Template track:
+            {"kind": "template", "template": "sma_cross", "symbol": "AAPL",
+             "params": {"fast": 10, "slow": 30, "quantity": 5}}
+            Code track (if enabled for your group):
+            {"kind": "code", "symbol": "AAPL",
+             "source": "def on_bar(ctx):\\n    ..."}
+        description: Optional description
+
+    Returns:
+        The created strategy (with id and version) on success. On validation
+        failure, an error dict whose "fields" list every spec violation —
+        fix them and retry.
+    """
+    payload: dict = {"name": name, "spec": spec}
+    if description is not None:
+        payload["description"] = description
+    success, data = _api_call("POST", "/api/v1/strategies", json_data=payload)
+    if success:
+        return {"success": True, "strategy": data}
+    return data
+
+
+@mcp.tool
+def update_strategy(
+    strategy_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    spec: dict | None = None,
+) -> dict:
+    """Update a strategy. Changing the spec bumps its version; name/description
+    edits do not.
+
+    Args:
+        strategy_id: UUID of the strategy
+        name: New name (optional)
+        description: New description (optional)
+        spec: New spec (optional; same shape as create_strategy)
+
+    Returns:
+        The updated strategy on success; error dict with "fields" on invalid spec.
+    """
+    payload: dict = {}
+    if name is not None:
+        payload["name"] = name
+    if description is not None:
+        payload["description"] = description
+    if spec is not None:
+        payload["spec"] = spec
+    success, data = _api_call("PATCH", f"/api/v1/strategies/{strategy_id}", json_data=payload)
+    if success:
+        return {"success": True, "strategy": data}
+    return data
+
+
+@mcp.tool
+def list_strategies() -> list[dict]:
+    """List all strategies for the authenticated user.
+
+    Returns:
+        List of strategies with id, name, spec, spec_summary, and version.
+        Empty list on error.
+    """
+    success, data = _api_call("GET", "/api/v1/strategies")
+    if success:
+        return data
+    return []
+
+
+@mcp.tool
+def get_strategy(strategy_id: str) -> dict:
+    """Get one strategy by id.
+
+    Args:
+        strategy_id: UUID of the strategy
+
+    Returns:
+        Strategy details (spec, version, spec_summary). Error dict on failure.
+    """
+    success, data = _api_call("GET", f"/api/v1/strategies/{strategy_id}")
+    return data
+
+
+@mcp.tool
+def run_backtest(
+    strategy_id: str,
+    start: str,
+    end: str,
+    initial_cash: Decimal = Decimal("100000"),
+) -> dict:
+    """Start a backtest of a strategy over a daily-bar window.
+
+    The backtest runs in the background; poll get_strategy_run(run_id) until
+    status is COMPLETED (stats + equity curve) or FAILED (error message).
+
+    Args:
+        strategy_id: UUID of the strategy
+        start: Window start date, ISO format (e.g. "2025-01-01")
+        end: Window end date, ISO format
+        initial_cash: Starting cash for the simulated portfolio
+
+    Returns:
+        The run (status QUEUED, pinned strategy_version) on success;
+        error dict on failure (e.g. window over the group limit).
+    """
+    payload = {"start": start, "end": end, "initial_cash": float(initial_cash)}
+    success, data = _api_call("POST", f"/api/v1/strategies/{strategy_id}/backtests", json_data=payload)
+    if success:
+        return {"success": True, "run": data,
+                "hint": "Poll get_strategy_run until status is COMPLETED or FAILED."}
+    return data
+
+
+@mcp.tool
+def get_strategy_run(run_id: str) -> dict:
+    """Get a strategy run's status, stats, and equity curve.
+
+    Args:
+        run_id: UUID of the run
+
+    Returns:
+        Run details: status, stats (total_return, max_drawdown, sharpe,
+        win_rate, trade_count, final_equity), error (if FAILED), and
+        equity_points. Error dict on failure.
+    """
+    success, data = _api_call("GET", f"/api/v1/strategy-runs/{run_id}")
+    return data
+
+
+@mcp.tool
+def list_strategy_runs(
+    strategy_id: str | None = None,
+    mode: str | None = None,
+    status: str | None = None,
+) -> list[dict]:
+    """List strategy runs (execution history), optionally filtered.
+
+    Args:
+        strategy_id: Only runs of this strategy UUID
+        mode: "BACKTEST" or "PAPER"
+        status: QUEUED, RUNNING, COMPLETED, FAILED, STARTING, STOPPED, ERROR
+
+    Returns:
+        List of runs, newest first. Empty list on error.
+    """
+    params = {k: v for k, v in {
+        "strategy_id": strategy_id, "mode": mode, "status": status
+    }.items() if v is not None}
+    success, data = _api_call("GET", "/api/v1/strategy-runs", params=params or None)
+    if success:
+        return data
+    return []
+
+
+@mcp.tool
+def start_strategy(strategy_id: str, account_id: str) -> dict:
+    """Start a live paper run of a strategy against a paper account.
+
+    The strategy's signals are evaluated on each new daily bar and turned
+    into orders on the account. Poll get_strategy_run for status
+    (STARTING -> RUNNING; ERROR on failure).
+
+    Args:
+        strategy_id: UUID of the strategy
+        account_id: UUID of the paper account to trade
+
+    Returns:
+        The run on success; error dict on failure (e.g. group active-strategy limit).
+    """
+    payload = {"account_id": account_id}
+    success, data = _api_call("POST", f"/api/v1/strategies/{strategy_id}/runs", json_data=payload)
+    if success:
+        return {"success": True, "run": data}
+    return data
+
+
+@mcp.tool
+def stop_strategy(run_id: str) -> dict:
+    """Stop a live paper run. Cancels the run's resting LIMIT orders but never
+    closes its positions.
+
+    Args:
+        run_id: UUID of the run to stop
+
+    Returns:
+        The updated run (status STOPPED) on success; error dict on failure.
+    """
+    success, data = _api_call("POST", f"/api/v1/strategy-runs/{run_id}/stop")
+    if success:
+        return {"success": True, "run": data}
     return data
 
 

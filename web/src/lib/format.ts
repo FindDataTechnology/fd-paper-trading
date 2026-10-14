@@ -43,3 +43,29 @@ export function signed(n: number, dp = 2): string {
   const s = money(n, dp);
   return n > 0 ? `+${s}` : s;
 }
+
+/** Percent formatter for return/win-rate ratios expressed as 0-1 fractions. */
+export function pct(v: string | number | null | undefined, dp = 2): string {
+  if (v === null || v === undefined) return "-";
+  const n = Number(v);
+  if (!isFinite(n)) return "-";
+  return `${(n * 100).toFixed(dp)}%`;
+}
+
+/** CSS class for a run status badge. */
+export function runStatusClass(status: string): string {
+  switch (status) {
+    case "RUNNING":
+    case "STARTING":
+      return "badge sim";
+    case "COMPLETED":
+      return "pos";
+    case "FAILED":
+    case "ERROR":
+      return "neg";
+    case "STOPPED":
+      return "muted";
+    default:
+      return "muted";
+  }
+}

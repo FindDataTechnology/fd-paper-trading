@@ -18,7 +18,10 @@ import Dashboard from "./pages/Dashboard";
 import OrdersPage from "./pages/OrdersPage";
 import OrderDetailPage from "./pages/OrderDetailPage";
 import InstrumentPage from "./pages/InstrumentPage";
+import StrategiesPage from "./pages/StrategiesPage";
+import StrategyDetailPage from "./pages/StrategyDetailPage";
 import ChatProvider from "./components/ChatProvider";
+import MobileApp from "./mobile/MobileApp";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } },
@@ -44,6 +47,14 @@ function AppContent() {
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route
+        path="/m"
+        element={
+          <ProtectedRoute>
+            <MobileApp />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         element={
           <ProtectedRoute>
             <ChatProvider activeAccountId={activeAccountId || undefined}>
@@ -56,6 +67,8 @@ function AppContent() {
         <Route path="orders" element={<OrdersPage />} />
         <Route path="orders/:orderId" element={<OrderDetailPage />} />
         <Route path="instruments/:symbol" element={<InstrumentPage />} />
+        <Route path="strategies" element={<StrategiesPage />} />
+        <Route path="strategies/:strategyId" element={<StrategyDetailPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

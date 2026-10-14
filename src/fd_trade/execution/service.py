@@ -1,16 +1,19 @@
-"""Paper order execution: Nautilus fill calculation + Postgres ledger.
+"""Paper order execution: SIM fill calculation + Postgres ledger.
 
-The ``PaperExecutionService`` is the bridge between the API and Nautilus:
+The ``PaperExecutionService`` is the bridge between the API and the ledger:
 - It asks the market-data provider for a quote and instrument.
-- It uses ``NautilusFillEngine`` (Nautilus's matching engine) to compute fills.
+- It uses ``SimFillEngine`` (pure-Python arithmetic against the single quote)
+  to compute fills.
 - It applies fills to the PostgreSQL ledger (positions, balances, fill events).
 
-Account isolation lives in Postgres (per ``account_id``); the Nautilus engine is
-used as a stateless fill calculator with a shared ``SIM`` venue.
+Account isolation lives in Postgres (per ``account_id``); concurrent orders on
+the same account are serialized by the caller holding a ``FOR UPDATE`` row lock
+on the account, so read-modify-write on cash/positions cannot race.
 """
 
-import asyncio
+import time
 import uuid
+from collections import OrderedDict
 from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +30,7 @@ from ..persistence.models import (
     Position,
 )
 from ..persistence.repositories import PositionRepository
-from .fill_engine import FillResult, NautilusFillEngine
+from .fill_engine import FillResult, SimFillEngine
 
 
 class OrderRejected(Exception):
@@ -39,14 +42,64 @@ class OrderRejected(Exception):
         super().__init__(message)
 
 
+class _TokenBucket:
+    __slots__ = ("rate", "burst", "tokens", "ts")
+
+    def __init__(self, rate: float, burst: float) -> None:
+        self.rate = rate
+        self.burst = burst
+        self.tokens = float(burst)
+        self.ts = time.monotonic()
+
+    def allow(self) -> bool:
+        now = time.monotonic()
+        self.tokens = min(self.burst, self.tokens + (now - self.ts) * self.rate)
+        self.ts = now
+        if self.tokens >= 1.0:
+            self.tokens -= 1.0
+            return True
+        return False
+
+
+class RateLimiter:
+    """Per-account token buckets, LRU-bounded.
+
+    ponytail: in-memory only; swap for Redis if the app ever runs multiple
+    workers (in-process limits would not be shared).
+    """
+
+    def __init__(self, rate: float, burst: float, max_accounts: int = 10_000) -> None:
+        self.rate = rate
+        self.burst = burst
+        self.max_accounts = max_accounts
+        self._buckets: OrderedDict[uuid.UUID, _TokenBucket] = OrderedDict()
+
+    def allow(self, account_id: uuid.UUID) -> bool:
+        bucket = self._buckets.get(account_id)
+        if bucket is None:
+            if len(self._buckets) >= self.max_accounts:
+                self._buckets.popitem(last=False)
+            bucket = _TokenBucket(self.rate, self.burst)
+            self._buckets[account_id] = bucket
+        self._buckets.move_to_end(account_id)
+        return bucket.allow()
+
+
 class PaperExecutionService:
     def __init__(
         self,
         provider: MarketDataProvider,
-        fill_engine: NautilusFillEngine | None = None,
+        fill_engine: SimFillEngine | None = None,
+        rate_limit_per_second: float = 0,
+        rate_limit_burst: float = 20,
     ) -> None:
         self.provider = provider
-        self.fill_engine = fill_engine or NautilusFillEngine()
+        self.fill_engine = fill_engine or SimFillEngine()
+        self.rate_limiter = (
+            RateLimiter(rate_limit_per_second, rate_limit_burst)
+            if rate_limit_per_second > 0
+            else None
+        )
 
     async def place_order(
         self,
@@ -58,7 +111,11 @@ class PaperExecutionService:
         quantity: Decimal,
         limit_price: Decimal | None = None,
         client_order_id: str | None = None,
+        strategy_run_id: uuid.UUID | None = None,
     ) -> Order:
+        if self.rate_limiter is not None and not self.rate_limiter.allow(account.id):
+            raise OrderRejected("rate_limited", "Order rate limit exceeded")
+
         instrument = self.provider.get_instrument(symbol)
         if instrument is None:
             raise OrderRejected("unknown_instrument", f"No instrument for symbol '{symbol}'")
@@ -89,6 +146,7 @@ class PaperExecutionService:
             account_id=account.id,
             user_id=account.user_id,
             client_order_id=client_order_id,
+            strategy_run_id=strategy_run_id,
             instrument_id=instrument_id,
             symbol=symbol,
             side=side,
@@ -100,17 +158,7 @@ class PaperExecutionService:
         session.add(order)
         await session.flush()
 
-        # Nautilus matching engine runs synchronously; offload so the API loop
-        # is not blocked (~10-20ms per fill).
-        result: FillResult = await asyncio.to_thread(
-            self.fill_engine.compute_fill,
-            instrument,
-            quote,
-            side,
-            order_type,
-            quantity,
-            limit_price,
-        )
+        result = self.fill_engine.compute_fill(quote, side, order_type, quantity, limit_price)
 
         if result.fills:
             for price, qty in result.fills:

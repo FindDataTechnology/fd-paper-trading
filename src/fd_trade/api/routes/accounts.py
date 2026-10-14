@@ -105,8 +105,11 @@ async def list_positions(
 async def list_orders(
     account_id: uuid.UUID,
     status: str | None = None,
+    strategy_run_id: uuid.UUID | None = None,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[OrderOut]:
     await _get_owned_account(account_id, user.id, session)
-    return await OrderRepository(session).list_for_account(account_id, user.id, status)
+    return await OrderRepository(session).list_for_account(
+        account_id, user.id, status, strategy_run_id
+    )

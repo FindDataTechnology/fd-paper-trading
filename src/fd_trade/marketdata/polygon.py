@@ -8,15 +8,21 @@ reflect the last completed trading day, not real-time intraday quotes. Upgrade
 to a paid plan and swap in a real NBBO call to get live bid/ask.
 """
 
+from __future__ import annotations
+
 import time
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import httpx
-from nautilus_trader.model.instruments import Instrument
-from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 from .provider import MarketDataProvider, Quote
 from .simulated import SIM_VENUE, SimulatedMarketDataProvider
+
+if TYPE_CHECKING:
+    # Annotation-only; kept lazy so importing this module never pulls in the
+    # heavy nautilus_trader package (keeps sandbox subprocess spawn cheap).
+    from nautilus_trader.model.instruments import Instrument
 
 # Half-spread as a fraction of price (5 bps each side => 10 bps total),
 # with a $0.01 floor so bid != ask even for very low-priced stocks.
@@ -87,7 +93,8 @@ class PolygonMarketDataProvider(MarketDataProvider):
         return Quote(instrument_id=f"{symbol}.{SIM_VENUE}", bid=bid, ask=ask)
 
     def get_instrument(self, symbol: str) -> Instrument | None:
-        return TestInstrumentProvider.equity(symbol=symbol, venue=SIM_VENUE)
+        # Same SIM equity universe as the simulated provider (cached there).
+        return self._sim.get_instrument(symbol)
 
     async def aclose(self) -> None:
         await self._client.aclose()
