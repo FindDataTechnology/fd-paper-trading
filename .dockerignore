@@ -15,3 +15,4 @@ e2e.db
 web/test-results/
 web/playwright-report/
 openspec/
+!alembic/

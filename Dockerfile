@@ -14,8 +14,9 @@ WORKDIR /app
 
 # uv for fast locked installs; no cache kept in the image.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
-COPY pyproject.toml uv.lock README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE alembic.ini ./
 COPY src/ ./src/
+COPY alembic/ ./alembic/
 COPY --from=webbuild /build/dist ./web/dist
 
 RUN uv sync --frozen --no-dev --no-install-project \
@@ -25,5 +26,8 @@ RUN uv sync --frozen --no-dev --no-install-project \
 RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app
 USER appuser
 
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 EXPOSE 8000
-CMD ["uv", "run", "--no-dev", "fd-paper-trading"]
+ENTRYPOINT ["/app/entrypoint.sh"]
