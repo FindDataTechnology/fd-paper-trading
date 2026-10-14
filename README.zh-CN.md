@@ -1,6 +1,8 @@
 <div align="center">
 
-**[English](./README.md)** | **[中文](./README.zh-CN.md)**
+**Part of the [Wire line (寻数·柏讯)](https://www.finddatatech.cloud/products/wire) of [FindData](https://www.finddatatech.cloud)** — the B2B data platform line.
+
+[English](./README.md) · [简体中文](./README.zh-CN.md)
 
 </div>
 
