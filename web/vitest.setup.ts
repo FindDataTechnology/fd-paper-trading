@@ -23,3 +23,15 @@ if (!(window as unknown as { ResizeObserver?: unknown }).ResizeObserver) {
     disconnect() {}
   };
 }
+
+// jsdom does not implement canvas; lightweight-charts measures its price axis
+// via 2d context. Stub getContext to a no-op recorder so chart construction
+// does not emit uncaught "Value is null" errors (tests themselves pass; the
+// unhandled rejection fails the vitest process).
+if (!HTMLCanvasElement.prototype.getContext) {
+  const noopCtx = new Proxy(
+    {},
+    { get: () => () => undefined },
+  );
+  HTMLCanvasElement.prototype.getContext = (() => noopCtx) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+}
