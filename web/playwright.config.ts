@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * Playwright config for the fd-trade frontend e2e suite.
+ * Playwright config for the fd-paper-trading frontend e2e suite.
  *
  * The webServer builds the SPA (if needed) and starts the FastAPI backend
  * against a file-based SQLite DB with the simulated market-data provider, so

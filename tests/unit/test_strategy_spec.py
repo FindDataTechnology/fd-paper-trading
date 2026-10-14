@@ -2,7 +2,7 @@
 
 import pytest
 
-from fd_trade.strategy import (
+from fd_paper_trading.strategy import (
     CodeSpec,
     SpecValidationError,
     TemplateSpec,

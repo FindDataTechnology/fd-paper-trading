@@ -11,11 +11,11 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from fd_trade.accounts.service import AccountService
-from fd_trade.config import Settings
-from fd_trade.persistence.base import create_database, init_db
-from fd_trade.persistence.models import BalanceTransaction, Order, OrderStatus, Position
-from fd_trade.persistence.repositories import AccountRepository
+from fd_paper_trading.accounts.service import AccountService
+from fd_paper_trading.config import Settings
+from fd_paper_trading.persistence.base import create_database, init_db
+from fd_paper_trading.persistence.models import BalanceTransaction, Order, OrderStatus, Position
+from fd_paper_trading.persistence.repositories import AccountRepository
 
 
 def _settings(**overrides) -> Settings:

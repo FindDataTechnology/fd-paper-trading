@@ -37,7 +37,7 @@ Custom strategy source SHALL be validated synchronously at create/update time. V
 
 ### Requirement: Sandboxed subprocess execution
 
-Custom-code evaluation SHALL execute in a separate worker process (`python -m fd_trade.strategy.sandbox_worker`) receiving the job (source, bar window, position, cash) as JSON on stdin and returning emitted signals as JSON on stdout. The worker SHALL run with resource limits (CPU 10 s, address space 256 MB) and a wall-clock timeout; on timeout, crash, or malformed output the evaluation SHALL be treated as failed. Template-track strategies SHALL NOT use the subprocess (interpreted in-process).
+Custom-code evaluation SHALL execute in a separate worker process (`python -m fd_paper_trading.strategy.sandbox_worker`) receiving the job (source, bar window, position, cash) as JSON on stdin and returning emitted signals as JSON on stdout. The worker SHALL run with resource limits (CPU 10 s, address space 256 MB) and a wall-clock timeout; on timeout, crash, or malformed output the evaluation SHALL be treated as failed. Template-track strategies SHALL NOT use the subprocess (interpreted in-process).
 
 #### Scenario: Infinite loop killed by timeout
 - **WHEN** source contains `while True: pass`

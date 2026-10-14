@@ -9,7 +9,7 @@ back to the deterministic simulated universe (no network).
 
 import pytest
 
-from fd_trade.marketdata import PolygonMarketDataProvider
+from fd_paper_trading.marketdata import PolygonMarketDataProvider
 
 
 @pytest.fixture

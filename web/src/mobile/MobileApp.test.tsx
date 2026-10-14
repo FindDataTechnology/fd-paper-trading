@@ -61,7 +61,7 @@ beforeEach(() => {
 describe("MobileApp", () => {
   it("renders the shell with all five tabs and the equity summary", () => {
     renderWithProviders(<MobileApp />);
-    expect(screen.getByText("fd-trade")).toBeInTheDocument();
+    expect(screen.getByText("fd-paper-trading")).toBeInTheDocument();
     expect(screen.getByText("12,000.00")).toBeInTheDocument();
     for (const label of ["Watch", "Trade", "Pos", "Orders", "Strat"]) {
       expect(screen.getByText(label)).toBeInTheDocument();

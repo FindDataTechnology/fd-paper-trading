@@ -11,8 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fd_trade.marketdata import FdOpenDataMarketDataProvider
-from fd_trade.marketdata import fd_open_data as mod
+from fd_paper_trading.marketdata import FdOpenDataMarketDataProvider
+from fd_paper_trading.marketdata import fd_open_data as mod
 
 
 @pytest.fixture

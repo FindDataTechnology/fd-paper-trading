@@ -6,9 +6,9 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from fd_trade.api.app import create_app
-from fd_trade.marketdata import SimulatedMarketDataProvider
-from fd_trade.persistence.base import init_db
+from fd_paper_trading.api.app import create_app
+from fd_paper_trading.marketdata import SimulatedMarketDataProvider
+from fd_paper_trading.persistence.base import init_db
 
 TEST_DB_URL = "sqlite+aiosqlite://"
 
@@ -71,7 +71,7 @@ async def test_absent_web_dist_returns_404_for_deep_link():
     application = create_app(
         database_url=TEST_DB_URL,
         market_data_provider=SimulatedMarketDataProvider(),
-        web_dist_dir=Path("/nonexistent-fd-trade-web-dist"),
+        web_dist_dir=Path("/nonexistent-fd-paper-trading-web-dist"),
     )
     await init_db(application.state.db)
     transport = ASGITransport(app=application)

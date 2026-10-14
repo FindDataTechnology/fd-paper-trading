@@ -17,7 +17,7 @@ export const useAuth = create<AuthState>()(
       logout: () => set({ token: null }),
     }),
     {
-      name: "fd-trade-auth",
+      name: "fd-paper-trading-auth",
       storage: createJSONStorage(() => sessionStorage),
     }
   )

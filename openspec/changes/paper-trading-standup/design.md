@@ -8,7 +8,7 @@ See `proposal.md` for motivation. The constraints that shape this design:
 - `nautilus_trader` occupies 444 MB of a 782 MB virtualenv. Its only uses in `src/` are
   `Instrument` type annotations and `TestInstrumentProvider`; `scripts/spike_nautilus_fill.py`
   is its only substantive consumer. Fills, backtests, and the sandbox are already pure Python.
-- The MCP server reads one `TRADE_API_TOKEN` at import time and sends it for every call,
+- The MCP server reads one `PAPER_TRADING_API_TOKEN` at import time and sends it for every call,
   while the REST layer already resolves per-user `fdt_` tokens. The gap is forwarding, not
   capability.
 - The roster of live concept families in the catalog: index (`IDX_*`), crypto (`CRYPTO_*`),

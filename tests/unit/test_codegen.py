@@ -2,8 +2,8 @@
 
 import pytest
 
-from fd_trade.strategy import validate_source, validate_source_strict
-from fd_trade.strategy.codegen import CodeValidationError
+from fd_paper_trading.strategy import validate_source, validate_source_strict
+from fd_paper_trading.strategy.codegen import CodeValidationError
 
 VALID = [
     "def on_bar(ctx):\n    ctx.buy(1)",

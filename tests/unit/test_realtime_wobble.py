@@ -2,9 +2,9 @@
 
 from decimal import Decimal
 
-from fd_trade.marketdata import SimulatedMarketDataProvider
-from fd_trade.marketdata.provider import Quote
-from fd_trade.realtime.manager import ConnectionManager
+from fd_paper_trading.marketdata import SimulatedMarketDataProvider
+from fd_paper_trading.marketdata.provider import Quote
+from fd_paper_trading.realtime.manager import ConnectionManager
 
 
 def _manager() -> ConnectionManager:

@@ -8,9 +8,9 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from fd_trade.api.app import create_app
-from fd_trade.marketdata import SimulatedMarketDataProvider
-from fd_trade.persistence.base import init_db
+from fd_paper_trading.api.app import create_app
+from fd_paper_trading.marketdata import SimulatedMarketDataProvider
+from fd_paper_trading.persistence.base import init_db
 
 TEST_DB_URL = "sqlite+aiosqlite://"
 

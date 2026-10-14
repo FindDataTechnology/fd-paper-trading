@@ -5,8 +5,8 @@ from datetime import date, timedelta
 
 import pytest
 
-import fd_trade.api.routes.strategies as strategies_module
-from fd_trade.strategy import EvaluationError
+import fd_paper_trading.api.routes.strategies as strategies_module
+from fd_paper_trading.strategy import EvaluationError
 
 DCA_SPEC = {
     "kind": "template",

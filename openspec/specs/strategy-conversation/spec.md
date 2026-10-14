@@ -5,7 +5,7 @@ TBD - created by syncing change add-quant-strategies. Update Purpose as needed.
 ## Requirements
 ### Requirement: Strategy MCP tools
 
-The fd-trade MCP server SHALL expose these tools, each calling the authenticated REST API with the configured token: `list_strategy_templates` (template catalog incl. per-template JSON Schema), `create_strategy`, `update_strategy`, `list_strategies`, `get_strategy`, `run_backtest`, `get_strategy_run`, `start_strategy`, `stop_strategy`, `list_strategy_runs`. The tools SHALL be available on both existing transports (stdio and HTTP/SSE) without transport-specific code.
+The fd-paper-trading MCP server SHALL expose these tools, each calling the authenticated REST API with the configured token: `list_strategy_templates` (template catalog incl. per-template JSON Schema), `create_strategy`, `update_strategy`, `list_strategies`, `get_strategy`, `run_backtest`, `get_strategy_run`, `start_strategy`, `stop_strategy`, `list_strategy_runs`. The tools SHALL be available on both existing transports (stdio and HTTP/SSE) without transport-specific code.
 
 #### Scenario: Catalog tool returns schemas
 - **WHEN** an LLM calls `list_strategy_templates`

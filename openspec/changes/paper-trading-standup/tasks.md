@@ -1,8 +1,8 @@
 ## 1. Move and rename
 
 - [ ] 1.1 Move the repository to the workspace as `~/finddata/fd-paper-trading` (`git mv` the directory so history is preserved), and verify `git log --oneline` still shows the three existing commits and `git status` is clean
-- [ ] 1.2 Rename the importable package directory `src/fd_trade` → `src/fd_paper_trading` with `git mv`, and verify `python -c "import fd_paper_trading"` succeeds after dependency install
-- [ ] 1.3 Substitute the retired identifiers (`fd_trade`, `fd-trade`, `fdtrade`) across the 63 live files with a codemod, leaving `openspec/changes/archive/` untouched, and verify `grep -rE "fd_trade|fd-trade|fdtrade"` outside the archive returns nothing
+- [ ] 1.2 Rename the importable package directory `src/fd_paper_trading` → `src/fd_paper_trading` with `git mv`, and verify `python -c "import fd_paper_trading"` succeeds after dependency install
+- [ ] 1.3 Substitute the retired identifiers (`fd_paper_trading`, `fd-paper-trading`, `paper_trading`) across the 63 live files with a codemod, leaving `openspec/changes/archive/` untouched, and verify `grep -rE "fd_paper_trading|fd-paper-trading|paper_trading"` outside the archive returns nothing
 - [ ] 1.4 Hand-fix the two non-substitutable spots: the sandbox worker's `python -m` module path string and the MCP server name, and verify by running the sandbox subprocess test (`tests/unit/test_sandbox_worker.py`) — it must spawn the worker successfully
 - [ ] 1.5 Update `pyproject.toml`: distribution name, console script, MIT license declaration, removal of the absolute-path `tool.uv.sources` entry for `fd-open-data-mcp` in favour of a normal versioned dependency; verify `uv sync` resolves with no local path in the lockfile for that package
 - [ ] 1.6 Update the default database name to `paper_trading` in `config.py` and `.env.example`, and verify the documented default and the code default agree by grep

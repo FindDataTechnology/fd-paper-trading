@@ -1,4 +1,4 @@
-"""fd-trade MCP server: expose paper-trading operations as Claude tools."""
+"""fd-paper-trading MCP server: expose paper-trading operations as Claude tools."""
 
 import os
 from decimal import Decimal
@@ -7,16 +7,16 @@ import requests
 from fastmcp import FastMCP
 
 # ponytail: env var auth only - no prompts, just configure once in settings.json
-TRADE_API_URL = os.getenv("TRADE_API_URL", "http://localhost:8000")
-TRADE_API_TOKEN = os.getenv("TRADE_API_TOKEN")
+PAPER_TRADING_API_URL = os.getenv("PAPER_TRADING_API_URL", "http://localhost:8000")
+PAPER_TRADING_API_TOKEN = os.getenv("PAPER_TRADING_API_TOKEN")
 
-if not TRADE_API_TOKEN:
+if not PAPER_TRADING_API_TOKEN:
     raise RuntimeError(
-        "TRADE_API_TOKEN environment variable is required. "
-        "Configure it in your Claude settings under mcpServers.fd-trade.env"
+        "PAPER_TRADING_API_TOKEN environment variable is required. "
+        "Configure it in your Claude settings under mcpServers.fd-paper-trading.env"
     )
 
-mcp = FastMCP("fd-trade")
+mcp = FastMCP("fd-paper-trading")
 
 
 @mcp.tool
@@ -59,9 +59,9 @@ def place_order(
             payload["limit_price"] = float(limit_price)
 
         resp = requests.post(
-            f"{TRADE_API_URL}/api/v1/orders",
+            f"{PAPER_TRADING_API_URL}/api/v1/orders",
             headers={
-                "Authorization": f"Bearer {TRADE_API_TOKEN}",
+                "Authorization": f"Bearer {PAPER_TRADING_API_TOKEN}",
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -101,8 +101,8 @@ def cancel_order(order_id: str) -> dict:
     client = httpx.AsyncClient(timeout=30.0)
     try:
         resp = client.delete(
-            f"{TRADE_API_URL}/api/v1/orders/{order_id}",
-            headers={"Authorization": f"Bearer {TRADE_API_TOKEN}"},
+            f"{PAPER_TRADING_API_URL}/api/v1/orders/{order_id}",
+            headers={"Authorization": f"Bearer {PAPER_TRADING_API_TOKEN}"},
         )
         resp.raise_for_status()
         data = resp.json()
@@ -140,8 +140,8 @@ def list_orders(account_id: str, status: str | None = None) -> list[dict]:
             params["status"] = status
 
         resp = client.get(
-            f"{TRADE_API_URL}/api/v1/accounts/{account_id}/orders",
-            headers={"Authorization": f"Bearer {TRADE_API_TOKEN}"},
+            f"{PAPER_TRADING_API_URL}/api/v1/accounts/{account_id}/orders",
+            headers={"Authorization": f"Bearer {PAPER_TRADING_API_TOKEN}"},
             params=params,
         )
         resp.raise_for_status()
@@ -165,8 +165,8 @@ def list_accounts() -> list[dict]:
     client = httpx.AsyncClient(timeout=30.0)
     try:
         resp = client.get(
-            f"{TRADE_API_URL}/api/v1/accounts",
-            headers={"Authorization": f"Bearer {TRADE_API_TOKEN}"},
+            f"{PAPER_TRADING_API_URL}/api/v1/accounts",
+            headers={"Authorization": f"Bearer {PAPER_TRADING_API_TOKEN}"},
         )
         resp.raise_for_status()
         return resp.json()
@@ -192,8 +192,8 @@ def get_account(account_id: str) -> dict:
     client = httpx.AsyncClient(timeout=30.0)
     try:
         resp = client.get(
-            f"{TRADE_API_URL}/api/v1/accounts/{account_id}",
-            headers={"Authorization": f"Bearer {TRADE_API_TOKEN}"},
+            f"{PAPER_TRADING_API_URL}/api/v1/accounts/{account_id}",
+            headers={"Authorization": f"Bearer {PAPER_TRADING_API_TOKEN}"},
         )
         resp.raise_for_status()
         return resp.json()

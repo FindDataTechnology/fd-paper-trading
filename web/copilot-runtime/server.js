@@ -1,9 +1,9 @@
 /**
  * CopilotKit runtime server — bridges the CopilotKit frontend to the
- * fd-trade MCP server (which exposes place_order, cancel_order, etc.).
+ * fd-paper-trading MCP server (which exposes place_order, cancel_order, etc.).
  *
  * The MCP server runs as a separate process over HTTP/SSE:
- *   uv run python -m fd_trade.mcp.http_server
+ *   uv run python -m fd_paper_trading.mcp.http_server
  *
  * Usage:
  *   OPENAI_API_KEY=sk-... node server.js
@@ -45,7 +45,7 @@ const agent = new BuiltInAgent({
   model: customProvider(model),
   maxSteps: 5,
   prompt:
-    "You are a paper-trading and quant-strategy assistant for fd-trade. " +
+    "You are a paper-trading and quant-strategy assistant for fd-paper-trading. " +
     "You help the user trade on their paper accounts AND build, backtest, " +
     "and run automated trading strategies. Use the available MCP tools; " +
     "never invent tool names or parameters.\n\n" +
@@ -98,7 +98,7 @@ const agent = new BuiltInAgent({
     {
       type: "sse",
       url: mcpUrl,
-      serverId: "fd-trade",
+      serverId: "fd-paper-trading",
     },
   ],
 });

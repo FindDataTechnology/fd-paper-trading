@@ -585,7 +585,8 @@ server = [
 
 [[package]]
 name = "fd-open-data-mcp"
-source = { editable = "/Users/chengsishi/finddata/fd-open-data-mcp" }
+version = "0.5.37"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "alembic" },
     { name = "click" },
@@ -604,59 +605,26 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "uvicorn" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "akshare", marker = "extra == 'data'", specifier = ">=1.17" },
-    { name = "alembic", specifier = ">=1.13" },
-    { name = "beautifulsoup4", marker = "extra == 'data'", specifier = ">=4.12" },
-    { name = "click", specifier = ">=8.0" },
-    { name = "croniter", specifier = ">=2.0" },
-    { name = "edgartools", marker = "extra == 'data'", specifier = ">=2.0" },
-    { name = "fastapi", specifier = ">=0.110" },
-    { name = "fastembed", marker = "extra == 'search'", specifier = ">=0.3" },
-    { name = "fastmcp", specifier = ">=2.0" },
-    { name = "fd-open-data-protocol", directory = "../fd-open-data-protocol" },
-    { name = "jinja2", specifier = ">=3.1" },
-    { name = "pandas", specifier = ">=2.0" },
-    { name = "playwright", marker = "extra == 'browser'", specifier = ">=1.40" },
-    { name = "psycopg2-binary", specifier = ">=2.9" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "redis", specifier = ">=5.0" },
-    { name = "requests", marker = "extra == 'data'", specifier = ">=2.31" },
-    { name = "scrapling", marker = "extra == 'browser'", specifier = ">=0.4.7" },
-    { name = "sentence-transformers", marker = "extra == 'search-legacy'", specifier = ">=2.7" },
-    { name = "sqlalchemy", specifier = ">=2.0,<2.1" },
-    { name = "uvicorn", specifier = ">=0.29" },
-    { name = "wbgapi", marker = "extra == 'data'", specifier = ">=1.0" },
-    { name = "world-bank-data", marker = "extra == 'data'", specifier = ">=0.1" },
-    { name = "yfinance", marker = "extra == 'data'", specifier = ">=0.2" },
+sdist = { url = "https://files.pythonhosted.org/packages/42/7c/e7757c7897424e447e95d99fd724299625dbd5e5bfaa68d01d3e6df47dd3/fd_open_data_mcp-0.5.37.tar.gz", hash = "sha256:97dc0fa9c0b4d9402e5ec122ee2a49208c31d18180d9537befb9d60eda5bcd2a", size = 853686, upload-time = "2026-10-05T15:30:11.802Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/46/669d360a63ab47f1d0483c14e58f6c1d1b6c98cee8f8c56436d34d3c6dad/fd_open_data_mcp-0.5.37-py3-none-any.whl", hash = "sha256:e659063a164a9e508116905371618ee38adf7d8793386ec55f29ba1ae7c63409", size = 646696, upload-time = "2026-10-05T15:30:10.262Z" },
 ]
-provides-extras = ["data", "browser", "dev", "search", "search-legacy"]
 
 [[package]]
 name = "fd-open-data-protocol"
-source = { directory = "../fd-open-data-protocol" }
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'registry'", specifier = ">=3.1" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/48/d6/d0e3d2299616b7a03d964f807a77414c6a64ba7ae89b035201aa980480f9/fd_open_data_protocol-0.3.1.tar.gz", hash = "sha256:83b5d616c12ea40c78e622287bc22a131a7793f0c8da33b784839544900f8a2a", size = 45245, upload-time = "2026-10-02T07:25:20.212Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/fb/307833b51f9d3319081a6e2773742f9e7ed22bc982799ae2f85f872ca82b/fd_open_data_protocol-0.3.1-py3-none-any.whl", hash = "sha256:5ce3d0f9e502ab07759e58de34955ddbcbba9814fd4b1d060730e48e140b703e", size = 40724, upload-time = "2026-10-02T07:25:19.022Z" },
 ]
-provides-extras = ["dev", "registry"]
 
 [[package]]
-name = "fd-trade"
+name = "fd-paper-trading"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -695,7 +663,7 @@ requires-dist = [
     { name = "bcrypt", specifier = ">=4.0,<4.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastmcp", specifier = ">=2.5.3" },
-    { name = "fd-open-data-mcp", editable = "/Users/chengsishi/finddata/fd-open-data-mcp" },
+    { name = "fd-open-data-mcp", specifier = ">=0.4.4" },
     { name = "greenlet", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "nautilus-trader", specifier = ">=1.200.0" },

@@ -22,10 +22,10 @@ from decimal import Decimal
 
 import pytest
 
-from fd_trade.execution import PaperExecutionService
-from fd_trade.marketdata import SimulatedMarketDataProvider
-from fd_trade.marketdata.provider import Bar
-from fd_trade.persistence.models import (
+from fd_paper_trading.execution import PaperExecutionService
+from fd_paper_trading.marketdata import SimulatedMarketDataProvider
+from fd_paper_trading.marketdata.provider import Bar
+from fd_paper_trading.persistence.models import (
     DEFAULT_GROUP_CONFIG,
     DEFAULT_GROUP_ID,
     Order,
@@ -35,7 +35,7 @@ from fd_trade.persistence.models import (
     StrategyRunStatus,
     UserGroup,
 )
-from fd_trade.persistence.repositories import UserRepository
+from fd_paper_trading.persistence.repositories import UserRepository
 from sqlalchemy import select
 
 UTC = timezone.utc
@@ -370,7 +370,7 @@ async def test_error_on_account_deleted(client, app):
             break
         await asyncio.sleep(0.02)
 
-    from fd_trade.persistence.models import Account
+    from fd_paper_trading.persistence.models import Account
 
     async with app.state.db.session_factory() as session:
         acc = await session.get(Account, account_id)

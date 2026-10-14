@@ -11,7 +11,7 @@ import types
 
 from starlette.websockets import WebSocketDisconnect
 
-from fd_trade.api.routes.ws import ws_endpoint
+from fd_paper_trading.api.routes.ws import ws_endpoint
 
 _DISCONNECT = object()
 

@@ -1,4 +1,4 @@
-# fd-trade-mcp: MCP Server for Paper Trading
+# fd-paper-trading-mcp: MCP Server for Paper Trading
 
 ## Quick Start
 
@@ -7,7 +7,7 @@
 uv add fastmcp
 
 # Run server locally
-fastmcp run src/fd_trade/mcp/server.py
+fastmcp run src/fd_paper_trading/mcp/server.py
 
 # Or test with CLI
 fastmcp inspect http://localhost:8000/mcp  # List tools
@@ -21,12 +21,12 @@ Add to `~/.claude/settings.json`:
 ```json
 {
   "mcpServers": {
-    "fd-trade": {
+    "fd-paper-trading": {
       "command": "uv",
-      "args": ["run", "fd_trade.mcp.server"],
+      "args": ["run", "fd_paper_trading.mcp.server"],
       "env": {
-        "TRADE_API_URL": "http://localhost:8000",
-        "TRADE_API_TOKEN": "your-jwt-token-here"
+        "PAPER_TRADING_API_URL": "http://localhost:8000",
+        "PAPER_TRADING_API_TOKEN": "your-jwt-token-here"
       }
     }
   }
@@ -47,13 +47,13 @@ Add to `~/.claude/settings.json`:
 
 ```bash
 # Dev mode (auto-reloads)
-fastmcp dev src/fd_trade/mcp/server.py
+fastmcp dev src/fd_paper_trading/mcp/server.py
 
 # Test calls
-fastmcp call src/fd_trade/mcp/server.py list_accounts
+fastmcp call src/fd_paper_trading/mcp/server.py list_accounts
 
 # Full inspection
-fastmcp inspect src/fd_trade/mcp/server.py
+fastmcp inspect src/fd_paper_trading/mcp/server.py
 ```
 
 ## Architecture
@@ -64,8 +64,8 @@ See [design.md](./design.md) for full architecture diagram.
 
 ```bash
 # Manual testing
-export TRADE_API_TOKEN="test-token"
-uv run python -m src.fd_trade.mcp.server
+export PAPER_TRADING_API_TOKEN="test-token"
+uv run python -m src.fd_paper_trading.mcp.server
 
 # Unit tests
 pytest tests/unit/mcp/ -v

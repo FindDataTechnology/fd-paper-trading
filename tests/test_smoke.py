@@ -1,10 +1,10 @@
 """Smoke tests: package imports and app boots."""
 
-import fd_trade
+import fd_paper_trading
 
 
 def test_package_imports():
-    assert fd_trade.__version__
+    assert fd_paper_trading.__version__
 
 
 async def test_health(client):

@@ -2,7 +2,7 @@
 
 import pytest
 
-from fd_trade.strategy import indicators
+from fd_paper_trading.strategy import indicators
 
 
 # ---- sma ----

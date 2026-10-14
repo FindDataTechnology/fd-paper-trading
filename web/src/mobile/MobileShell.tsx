@@ -28,7 +28,7 @@ export default function MobileShell() {
   return (
     <div className="m-shell">
       <header className="m-topbar">
-        <span className="m-brand">fd-trade</span>
+        <span className="m-brand">fd-paper-trading</span>
         <span className="m-account">
           <AccountSwitcher />
         </span>

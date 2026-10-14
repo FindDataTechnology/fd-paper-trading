@@ -1,7 +1,7 @@
 """Alembic migration environment (async).
 
 Uses the application's ``Settings.database_url`` and the SQLAlchemy declarative
-metadata from ``fd_trade.persistence``. ``render_as_batch`` keeps migrations
+metadata from ``fd_paper_trading.persistence``. ``render_as_batch`` keeps migrations
 portable between Postgres and SQLite.
 """
 
@@ -14,9 +14,9 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
-from fd_trade.config import get_settings
-from fd_trade.persistence.base import Base
-import fd_trade.persistence.models  # noqa: F401  (registers models on Base.metadata)
+from fd_paper_trading.config import get_settings
+from fd_paper_trading.persistence.base import Base
+import fd_paper_trading.persistence.models  # noqa: F401  (registers models on Base.metadata)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

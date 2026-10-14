@@ -71,7 +71,7 @@ def main() -> int:
         from sqlalchemy import select
 
         from fd_open_data_mcp.models import Entity
-        from fd_trade.marketdata.simulated import _INSTRUMENT_UNIVERSE
+        from fd_paper_trading.marketdata.simulated import _INSTRUMENT_UNIVERSE
 
         print("== curated universe resolution ==")
         resolved = 0

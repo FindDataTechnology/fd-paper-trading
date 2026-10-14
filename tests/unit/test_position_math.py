@@ -6,8 +6,8 @@ database, no Nautilus engine. This is the highest-risk accounting logic.
 
 from decimal import Decimal
 
-from fd_trade.execution.service import PaperExecutionService
-from fd_trade.persistence.models import Position
+from fd_paper_trading.execution.service import PaperExecutionService
+from fd_paper_trading.persistence.models import Position
 
 
 def _pos(qty="0", avg="0", realized="0") -> Position:

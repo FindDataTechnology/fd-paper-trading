@@ -25,7 +25,7 @@ export default function Layout() {
           flexWrap: "wrap",
         }}
       >
-        <strong style={{ fontSize: 16 }}>fd-trade</strong>
+        <strong style={{ fontSize: 16 }}>fd-paper-trading</strong>
         <nav style={{ display: "flex", gap: 12 }}>
           <NavLink to="/" end>
             Dashboard

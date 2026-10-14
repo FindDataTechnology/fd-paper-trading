@@ -7,8 +7,8 @@ crosses the book; otherwise it rests OPEN.
 
 from decimal import Decimal
 
-from fd_trade.execution.fill_engine import FillResult, SimFillEngine
-from fd_trade.marketdata.provider import Quote
+from fd_paper_trading.execution.fill_engine import FillResult, SimFillEngine
+from fd_paper_trading.marketdata.provider import Quote
 
 _QUOTE = Quote(instrument_id="AAPL.SIM", bid=Decimal("100.00"), ask=Decimal("101.00"))
 

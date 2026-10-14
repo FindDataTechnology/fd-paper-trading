@@ -2,7 +2,7 @@
 
 ## Why
 
-`fd-trade` is a working multi-tenant paper-trading service, but it was never published
+`fd-paper-trading` is a working multi-tenant paper-trading service, but it was never published
 (its GitHub remote does not exist, there is no LICENSE, nothing is pushed) and three of
 its load-bearing assumptions have rotted:
 
@@ -10,7 +10,7 @@ its load-bearing assumptions have rotted:
    stock `price.close` concept, which the 2026-10-07 curation decision keeps deprecated
    (price data is fetched client-side; the server catalog curates public data only).
 2. **It cannot be used by several people at once.** The MCP server sends one static
-   `TRADE_API_TOKEN` for every call, so on a shared platform every caller acts as the
+   `PAPER_TRADING_API_TOKEN` for every call, so on a shared platform every caller acts as the
    same user.
 3. **It carries a 444 MB dependency it no longer uses.** `nautilus_trader` is the single
    largest thing in the environment, yet fills, backtests and the sandbox are already
@@ -26,8 +26,8 @@ first release they become runtime contracts that cannot change.
 
 ## What Changes
 
-- **Rename (BREAKING).** Repo/directory `fd-trade` → `fd-paper-trading`; import package
-  `fd_trade` → `fd_paper_trading`; MCP server name, console script, and default database
+- **Rename (BREAKING).** Repo/directory `fd-paper-trading` → `fd-paper-trading`; import package
+  `fd_paper_trading` → `fd_paper_trading`; MCP server name, console script, and default database
   name follow. The `fdt_` API-token prefix stays (existing tokens depend on it for
   dispatch, and it reads as find**d**ata **t**rade).
 - **Drop `nautilus_trader`.** Introduce an owned `Instrument` value type; delete the

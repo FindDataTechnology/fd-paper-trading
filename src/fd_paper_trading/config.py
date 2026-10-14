@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # ---- Database ----
     # Postgres in production; sqlite+aiosqlite for tests/dev.
-    database_url: str = "postgresql+asyncpg://localhost:5432/fdtrade"
+    database_url: str = "postgresql+asyncpg://localhost:5432/paper_trading"
     # Connection pool sizing (asyncpg). Defaults are small; raise for higher
     # concurrent load (e.g. 1000 users/bots).
     db_pool_size: int = 10
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-change-me"
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 60
-    jwt_issuer: str = "fd-trade"
+    jwt_issuer: str = "fd-paper-trading"
 
     # ---- Accounts ----
     default_starting_balance: Decimal = Decimal("100000.0000")

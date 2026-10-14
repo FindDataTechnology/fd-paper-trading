@@ -9,11 +9,11 @@ from decimal import Decimal
 
 import pytest
 
-import fd_trade.strategy.sandbox_worker as sw
-from fd_trade.marketdata.provider import Bar
-from fd_trade.strategy.backtester import EvaluationError
-from fd_trade.strategy.ctx import StrategyContext
-from fd_trade.strategy.sandbox_worker import _SandboxBarEvaluator
+import fd_paper_trading.strategy.sandbox_worker as sw
+from fd_paper_trading.marketdata.provider import Bar
+from fd_paper_trading.strategy.backtester import EvaluationError
+from fd_paper_trading.strategy.ctx import StrategyContext
+from fd_paper_trading.strategy.sandbox_worker import _SandboxBarEvaluator
 
 
 def _bar(ts: int, close: float) -> Bar:

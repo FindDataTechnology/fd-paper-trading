@@ -5,15 +5,15 @@ from decimal import Decimal
 
 import pytest
 
-from fd_trade.marketdata.provider import Bar
-from fd_trade.strategy import (
+from fd_paper_trading.marketdata.provider import Bar
+from fd_paper_trading.strategy import (
     EvaluationError,
     StrategyContext,
     build_evaluator,
     replay,
     validate_spec,
 )
-from fd_trade.strategy.backtester import _Portfolio, compute_stats
+from fd_paper_trading.strategy.backtester import _Portfolio, compute_stats
 
 
 def make_bars(closes: list[float], lows=None, highs=None) -> list[Bar]:

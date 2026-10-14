@@ -1,7 +1,7 @@
 """Custom-code sandbox: subprocess execution of ``on_bar`` (design D6, task 8.4).
 
 A code-track strategy never runs in-process. Each ``evaluate`` call spawns a
-short-lived subprocess (``python -m fd_trade.strategy.sandbox_worker``) that:
+short-lived subprocess (``python -m fd_paper_trading.strategy.sandbox_worker``) that:
 
 1. reads a JSON job on stdin: ``{source, bars, position, cash}``;
 2. re-validates the source (AST allowlist) and compiles it;
@@ -151,7 +151,7 @@ class _SandboxBarEvaluator:
 
     async def _run_subprocess(self, job: dict) -> dict | None:
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "fd_trade.strategy.sandbox_worker",
+            sys.executable, "-m", "fd_paper_trading.strategy.sandbox_worker",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

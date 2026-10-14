@@ -11,8 +11,8 @@ from datetime import date, timedelta
 
 import pytest
 
-from fd_trade.persistence.models import DEFAULT_GROUP_CONFIG, User
-from fd_trade.persistence.repositories import UserRepository
+from fd_paper_trading.persistence.models import DEFAULT_GROUP_CONFIG, User
+from fd_paper_trading.persistence.repositories import UserRepository
 
 CODE_SOURCE = "def on_bar(ctx):\n    ctx.buy(1)"
 CODE_SPEC = {"kind": "code", "symbol": "AAPL", "source": CODE_SOURCE}

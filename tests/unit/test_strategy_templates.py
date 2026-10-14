@@ -5,8 +5,8 @@ from decimal import Decimal
 
 import pytest
 
-from fd_trade.marketdata.provider import Bar
-from fd_trade.strategy import (
+from fd_paper_trading.marketdata.provider import Bar
+from fd_paper_trading.strategy import (
     CATALOG,
     StrategyContext,
     TemplateValidationError,

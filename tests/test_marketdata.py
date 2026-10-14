@@ -2,8 +2,8 @@
 
 from decimal import Decimal
 
-from fd_trade.marketdata import SimulatedMarketDataProvider
-from fd_trade.marketdata.provider import SUPPORTED_TIMEFRAMES
+from fd_paper_trading.marketdata import SimulatedMarketDataProvider
+from fd_paper_trading.marketdata.provider import SUPPORTED_TIMEFRAMES
 
 
 async def test_search_prefix_matches_symbol_or_name():

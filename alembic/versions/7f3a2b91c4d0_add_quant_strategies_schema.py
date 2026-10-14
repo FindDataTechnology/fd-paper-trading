@@ -29,7 +29,7 @@ depends_on: Union[str, Sequence[str], None] = None
 JSONB = postgresql.JSONB().with_variant(sa.JSON(), "sqlite")
 
 # Fixed id for the seeded group so app code can reference it deterministically.
-# Keep in sync with fd_trade.persistence.models.DEFAULT_GROUP_ID.
+# Keep in sync with fd_paper_trading.persistence.models.DEFAULT_GROUP_ID.
 DEFAULT_GROUP_ID = uuid.UUID("8f3a6b21-0000-4000-8000-000000000001")
 
 DEFAULT_GROUP_CONFIG = {

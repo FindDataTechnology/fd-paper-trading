@@ -1,6 +1,6 @@
 """Round-trip tests for the strategy MCP tools against a live REST server.
 
-The tools in ``fd_trade.mcp.server`` call the REST API with ``requests``, so
+The tools in ``fd_paper_trading.mcp.server`` call the REST API with ``requests``, so
 these tests boot the app under a real uvicorn in a background thread and
 exercise the tools end-to-end (strategy CRUD, backtest lifecycle, errors).
 """
@@ -14,14 +14,14 @@ import time
 import pytest
 import requests
 
-os.environ.setdefault("TRADE_API_TOKEN", "placeholder")  # import-time guard
+os.environ.setdefault("PAPER_TRADING_API_TOKEN", "placeholder")  # import-time guard
 # The dev shell may export http_proxy; loopback must not go through it.
 os.environ["NO_PROXY"] = "127.0.0.1,localhost"
 os.environ["no_proxy"] = "127.0.0.1,localhost"
 
-from fd_trade.api.app import create_app  # noqa: E402
-from fd_trade.mcp import server as mcp_server  # noqa: E402
-from fd_trade.persistence.base import init_db  # noqa: E402
+from fd_paper_trading.api.app import create_app  # noqa: E402
+from fd_paper_trading.mcp import server as mcp_server  # noqa: E402
+from fd_paper_trading.persistence.base import init_db  # noqa: E402
 
 TEMPLATE_SPEC = {
     "kind": "template",
@@ -96,8 +96,8 @@ def mcp(live_server):
         timeout=5,
     )
     token = r.json()["access_token"]
-    mcp_server.TRADE_API_URL = live_server
-    mcp_server.TRADE_API_TOKEN = token
+    mcp_server.PAPER_TRADING_API_URL = live_server
+    mcp_server.PAPER_TRADING_API_TOKEN = token
     return mcp_server
 
 
@@ -180,9 +180,9 @@ def test_start_stop_strategy_round_trip(mcp):
     if not accounts:
         # The fresh user has no account yet; create one via the REST API.
         r = requests.post(
-            f"{mcp_server.TRADE_API_URL}/api/v1/accounts",
+            f"{mcp_server.PAPER_TRADING_API_URL}/api/v1/accounts",
             json={"name": "paper"},
-            headers={"Authorization": f"Bearer {mcp_server.TRADE_API_TOKEN}"},
+            headers={"Authorization": f"Bearer {mcp_server.PAPER_TRADING_API_TOKEN}"},
             timeout=5,
         )
         assert r.status_code in (200, 201), r.text

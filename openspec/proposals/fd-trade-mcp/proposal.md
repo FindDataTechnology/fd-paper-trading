@@ -1,4 +1,4 @@
-# fd-trade-mcp: MCP Server for Paper Trading
+# fd-paper-trading-mcp: MCP Server for Paper Trading
 
 ## Change Summary
 
@@ -17,9 +17,9 @@ This change gives Claude first-class tool access to place/cancel/query orders an
 
 ### In Scope
 
-- FastMCP server (`src/fd_trade/mcp/server.py`)
+- FastMCP server (`src/fd_paper_trading/mcp/server.py`)
 - 5 tools: `place_order`, `cancel_order`, `list_orders`, `list_accounts`, `get_account`
-- Environment variable auth (`TRADE_API_URL`, `TRADE_API_TOKEN`)
+- Environment variable auth (`PAPER_TRADING_API_URL`, `PAPER_TRADING_API_TOKEN`)
 - snake_case tool naming per FastMCP conventions
 - Structured error responses on failure
 
@@ -47,7 +47,7 @@ This change gives Claude first-class tool access to place/cancel/query orders an
          │ MCP Stdio                     │ SQL Alchemy
          │
 ┌──────────────┐
-│ fd-trade-mcp │
+│ fd-paper-trading-mcp │
 │ FastMCP srv  │
 │ env vars:    │
 │ • URL        │
@@ -90,8 +90,8 @@ Raised exceptions surface as tool failure messages to Claude.
 ### Auth Strategy
 
 Environment variables only - no prompts:
-- `TRADE_API_URL` (default: `http://localhost:8000`)
-- `TRADE_API_TOKEN` (required - stored securely in Claude settings)
+- `PAPER_TRADING_API_URL` (default: `http://localhost:8000`)
+- `PAPER_TRADING_API_TOKEN` (required - stored securely in Claude settings)
 
 ### Naming Conventions
 
@@ -101,7 +101,7 @@ Environment variables only - no prompts:
 
 ## Tasks
 
-1. Create server module structure (`src/fd_trade/mcp/server.py`)
+1. Create server module structure (`src/fd_paper_trading/mcp/server.py`)
 2. Implement API client helper class
 3. Register 5 tools with proper type hints and docstrings
 4. Add environment variable defaults
@@ -126,7 +126,7 @@ Environment variables only - no prompts:
 
 - [x] Proposal approved
 - [ ] Code implemented
-- [ ] Can call `fastmcp dev src/fd_trade/mcp/server.py` successfully
+- [ ] Can call `fastmcp dev src/fd_paper_trading/mcp/server.py` successfully
 - [ ] All 5 tools callable via `fastmcp call`
 - [ ] Errors surfaced clearly to user
 - [ ] Documentation updated (CLAUDE.md or README)
@@ -134,5 +134,5 @@ Environment variables only - no prompts:
 ## References
 
 - FastMCP docs: https://github.com/ModelContextPython/fastmcp
-- Your API: `src/fd_trade/api/routes/orders.py`
+- Your API: `src/fd_paper_trading/api/routes/orders.py`
 - Existing patterns: `ponytail-mcp/index.js` (same tooling, different language)

@@ -23,7 +23,7 @@ name SHALL be `paper_trading`.
 
 #### Scenario: No old identifier survives in shipped code
 
-- **WHEN** the tracked working tree is searched for `fd_trade`, `fd-trade`, and `fdtrade`
+- **WHEN** the tracked working tree is searched for `fd_paper_trading`, `fd-paper-trading`, and `paper_trading`
   outside `openspec/changes/archive/`
 - **THEN** no match is found
 
@@ -77,7 +77,7 @@ connection variables SHALL be `PAPER_TRADING_API_URL` and `PAPER_TRADING_API_TOK
 
 #### Scenario: Old variable name is not silently honoured
 
-- **WHEN** the MCP server process is started with `TRADE_API_TOKEN` set and
+- **WHEN** the MCP server process is started with `PAPER_TRADING_API_TOKEN` set and
   `PAPER_TRADING_API_TOKEN` unset
 - **THEN** it does not treat the old variable as its credential source
 

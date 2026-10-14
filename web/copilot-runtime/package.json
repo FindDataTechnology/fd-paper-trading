@@ -1,5 +1,5 @@
 {
-  "name": "fd-trade-copilot-runtime",
+  "name": "fd-paper-trading-copilot-runtime",
   "private": true,
   "version": "0.1.0",
   "type": "module",

@@ -1,7 +1,7 @@
 # Web CopilotKit Chat
 
 ## Purpose
-A CopilotKit-powered chat assistant embedded in the fd-trade web UI. The assistant can manage paper-trading orders and accounts via the fd-trade MCP server.
+A CopilotKit-powered chat assistant embedded in the fd-paper-trading web UI. The assistant can manage paper-trading orders and accounts via the fd-paper-trading MCP server.
 ## Requirements
 ### Requirement: Chat interface with AI assistant
 

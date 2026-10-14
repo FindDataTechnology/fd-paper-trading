@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Bootstrapped and functional. The repository is a **multi-tenant stock paper-trading service**: a FastAPI REST + WebSocket backend (`src/fd_trade/`) on SQLAlchemy 2.0 async (Postgres in prod, aiosqlite in tests) plus a React + TypeScript + Vite SPA (`web/`). The full flow - register/login (JWT + revocable API tokens), multi-account management, market/limit orders with simulated fills, positions + cash ledgering, `/ws` streaming, and the web UI - is implemented and tested. **Quant strategies** (dual-track: fixed templates + sandboxed custom code; backtest + live paper runs; user-group limits) are implemented under `src/fd_trade/strategy/` (see the "Quant strategies" section below).
+Bootstrapped and functional. The repository is a **multi-tenant stock paper-trading service**: a FastAPI REST + WebSocket backend (`src/fd_paper_trading/`) on SQLAlchemy 2.0 async (Postgres in prod, aiosqlite in tests) plus a React + TypeScript + Vite SPA (`web/`). The full flow - register/login (JWT + revocable API tokens), multi-account management, market/limit orders with simulated fills, positions + cash ledgering, `/ws` streaming, and the web UI - is implemented and tested. **Quant strategies** (dual-track: fixed templates + sandboxed custom code; backtest + live paper runs; user-group limits) are implemented under `src/fd_paper_trading/strategy/` (see the "Quant strategies" section below).
 
 **v1 execution model:** fills are computed by a pure-Python SIM matcher (`execution/fill_engine.py`) - with the SIM provider's single static quote, a fill is arithmetic (market fills at ask/bid, limit fills when crossing), so the per-order Nautilus `BacktestEngine` was replaced (~1.8M fills/sec, ~0.5µs). Account state lives in the database, isolated by `account_id` (no per-account Nautilus venues); concurrent orders on the same account are serialized by a `FOR UPDATE` row lock in `POST /orders`. The live `TradingNode` + `SandboxLiveExecClientFactory` + async command-queue bridge remain **deferred** (see archived changes' `design.md`, decision D10) - that is where Nautilus matching will live, not in the paper hot path.
 
@@ -53,19 +53,19 @@ Nautilus is an **event-driven** engine. These pieces (spread across `live/`, `ba
 - Secrets/API keys in environment variables (e.g. `python-dotenv`), never in config files or commits.
 - Prefer the prebuilt wheel; reach for Rust/source builds only when an adapter requires it.
 
-## MCP Server: fd-trade-mcp
+## MCP Server: fd-paper-trading-mcp
 
 Claude can place/cancel orders via MCP tools (FastMCP-based). Configure in `~/.claude/settings.json`:
 
 ```json
 {
   "mcpServers": {
-    "fd-trade": {
+    "fd-paper-trading": {
       "command": "uv",
-      "args": ["run", "src.fd_trade.mcp.server"],
+      "args": ["run", "src.fd_paper_trading.mcp.server"],
       "env": {
-        "TRADE_API_URL": "http://localhost:8000",
-        "TRADE_API_TOKEN": "<your-jwt-token>"
+        "PAPER_TRADING_API_URL": "http://localhost:8000",
+        "PAPER_TRADING_API_TOKEN": "<your-jwt-token>"
       }
     }
   }
@@ -97,10 +97,10 @@ MCP server (port 8100, SSE transport) → FastAPI backend (port 8000)
 
 ```bash
 # Terminal 1: FastAPI backend
-uv run uvicorn fd_trade.api.app:create_app --factory --reload
+uv run uvicorn fd_paper_trading.api.app:create_app --factory --reload
 
 # Terminal 2: MCP server (HTTP/SSE mode for the runtime)
-TRADE_API_TOKEN=<jwt> uv run python -m fd_trade.mcp.http_server
+PAPER_TRADING_API_TOKEN=<jwt> uv run python -m fd_paper_trading.mcp.http_server
 
 # Terminal 3: CopilotKit runtime
 cd web/copilot-runtime && npm install && node server.js
@@ -134,7 +134,7 @@ The chat assistant has access to the same tools as the Claude Code MCP server:
 
 ## Quant strategies
 
-Dual-track strategy authoring under `src/fd_trade/strategy/`:
+Dual-track strategy authoring under `src/fd_paper_trading/strategy/`:
 
 - **Template track** - fixed strategies (`sma_cross`, `rsi_reversion`, `bollinger_breakout`, `macd_cross`, `dca`) with a JSON-Schema params form. Catalog at `strategy/templates.py::CATALOG`; list via `GET /api/v1/strategy-templates`.
 - **Code track** - free-form Python conforming to the `on_bar(ctx)` contract (`strategy/ctx.py`). Gated behind `allow_custom_code` (default off). Validated by an AST allowlist (`strategy/codegen.py`) and run in a subprocess sandbox (`strategy/sandbox_worker.py`: rlimit CPU 10s / AS 256MB, wall-clock 15s, restricted builtins, no imports). One subprocess per evaluated bar - correct and isolated, but slow for large code backtests.

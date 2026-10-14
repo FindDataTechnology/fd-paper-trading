@@ -11,8 +11,8 @@ import types
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from fd_trade.api.routes.ws import ws_endpoint, _AUTH_TIMEOUT  # noqa: F401
-from fd_trade.api.routes import ws as ws_module
+from fd_paper_trading.api.routes.ws import ws_endpoint, _AUTH_TIMEOUT  # noqa: F401
+from fd_paper_trading.api.routes import ws as ws_module
 
 _DISCONNECT = object()
 

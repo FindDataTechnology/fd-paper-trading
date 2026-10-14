@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from fd_trade.auth.security import (
+from fd_paper_trading.auth.security import (
     TokenError,
     create_access_token,
     decode_access_token,
@@ -17,7 +17,7 @@ from fd_trade.auth.security import (
     looks_like_api_token,
     verify_password,
 )
-from fd_trade.config import Settings
+from fd_paper_trading.config import Settings
 
 
 def _settings(**overrides) -> Settings:

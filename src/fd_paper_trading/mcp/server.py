@@ -1,4 +1,4 @@
-"""fd-trade MCP server: expose paper-trading operations as Claude tools."""
+"""fd-paper-trading MCP server: expose paper-trading operations as Claude tools."""
 
 import os
 from decimal import Decimal
@@ -7,25 +7,25 @@ import requests
 from fastmcp import FastMCP
 
 # ponytail: env var auth only - no prompts, just configure once in settings.json
-TRADE_API_URL = os.getenv("TRADE_API_URL", "http://localhost:8000")
-TRADE_API_TOKEN = os.getenv("TRADE_API_TOKEN")
+PAPER_TRADING_API_URL = os.getenv("PAPER_TRADING_API_URL", "http://localhost:8000")
+PAPER_TRADING_API_TOKEN = os.getenv("PAPER_TRADING_API_TOKEN")
 
-if not TRADE_API_TOKEN:
+if not PAPER_TRADING_API_TOKEN:
     raise RuntimeError(
-        "TRADE_API_TOKEN environment variable is required. "
-        "Configure it in your Claude settings under mcpServers.fd-trade.env"
+        "PAPER_TRADING_API_TOKEN environment variable is required. "
+        "Configure it in your Claude settings under mcpServers.fd-paper-trading.env"
     )
 
-mcp = FastMCP("fd-trade")
+mcp = FastMCP("fd-paper-trading")
 
 
 def _api_call(method: str, endpoint: str, json_data: dict | None = None, params: dict | None = None) -> tuple[bool, dict]:
     """Helper for REST API calls. Returns (success, result)."""
     headers = {
-        "Authorization": f"Bearer {TRADE_API_TOKEN}",
+        "Authorization": f"Bearer {PAPER_TRADING_API_TOKEN}",
         "Content-Type": "application/json",
     }
-    url = f"{TRADE_API_URL}{endpoint}"
+    url = f"{PAPER_TRADING_API_URL}{endpoint}"
     try:
         if method == "GET":
             resp = requests.get(url, headers=headers, params=params, timeout=30)

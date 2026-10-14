@@ -31,7 +31,7 @@ test("mobile /m trading journey", async ({ page }) => {
 
   // 2. Open the mobile surface.
   await page.goto("/m");
-  await expect(page.getByText("fd-trade")).toBeVisible();
+  await expect(page.getByText("fd-paper-trading")).toBeVisible();
   for (const label of ["Watch", "Trade", "Pos", "Orders", "Strat"]) {
     await expect(page.getByRole("button", { name: label })).toBeVisible();
   }

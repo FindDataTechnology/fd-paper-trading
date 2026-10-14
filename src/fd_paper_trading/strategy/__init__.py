@@ -3,8 +3,8 @@
 The live runner (``PaperRunSupervisor``) is imported lazily: it pulls in the
 execution + persistence (SQLAlchemy) stack, which the custom-code sandbox
 subprocess must not pay for on every per-bar spawn. Import it via
-``from fd_trade.strategy.runner import PaperRunSupervisor`` (the app does this)
-or access ``fd_trade.strategy.PaperRunSupervisor`` (resolved on first use).
+``from fd_paper_trading.strategy.runner import PaperRunSupervisor`` (the app does this)
+or access ``fd_paper_trading.strategy.PaperRunSupervisor`` (resolved on first use).
 """
 
 from .backtester import (

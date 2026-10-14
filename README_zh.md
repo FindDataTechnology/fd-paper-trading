@@ -4,7 +4,7 @@
 
 </div>
 
-# fd-trade
+# fd-paper-trading
 
 基于 [Nautilus Trader](https://nautilustrader.io) 构建的多租户**股票模拟交易**服务，通过 FastAPI REST + WebSocket API 对外提供服务。用户可以拥有多个模拟交易账户，通过 API 对实时市场数据进行下单，使用**模拟撮合**成交 —— 无需券商，无需真实资金。
 
@@ -44,14 +44,14 @@ cp .env.example .env   # 编辑 DATABASE_URL、JWT_SECRET、市场数据 API Key
 
 # 3. 启动 PostgreSQL 并执行数据库迁移
 brew services start postgresql@14
-createdb fdtrade
+createdb paper_trading
 uv run alembic upgrade head
 
 # 4. （可选）构建 Web 界面，让 FastAPI 在 / 路径提供服务
 cd web && npm install && npm run build && cd ..
 
 # 5. 启动 API（OpenAPI 文档地址：http://localhost:8000/docs）
-uv run fd-trade
+uv run fd-paper-trading
 ```
 
 > **注意：** 在 macOS 上，如果 5432 端口被占用，Homebrew 的 `postgresql@14` 可能运行在 5433 端口。请相应调整 `.env` 中的 `DATABASE_URL`。
@@ -60,7 +60,7 @@ uv run fd-trade
 
 ```bash
 # 终端 1：FastAPI 后端，监听 :8000
-uv run fd-trade
+uv run fd-paper-trading
 
 # 终端 2：Vite 开发服务器，监听 :5173（自动代理 /api 和 /ws 到后端）
 cd web && npm install && npm run dev
@@ -71,7 +71,7 @@ cd web && npm install && npm run dev
 ```bash
 # 构建 SPA 并从 FastAPI 统一提供服务
 cd web && npm run build
-uv run fd-trade   # SPA + API + /ws 全部在 http://localhost:8000/
+uv run fd-paper-trading   # SPA + API + /ws 全部在 http://localhost:8000/
 ```
 
 ## 架构

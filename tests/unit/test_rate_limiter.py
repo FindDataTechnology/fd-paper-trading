@@ -2,7 +2,7 @@
 
 import uuid
 
-from fd_trade.execution.service import RateLimiter
+from fd_paper_trading.execution.service import RateLimiter
 
 
 def test_token_bucket_limits_burst():

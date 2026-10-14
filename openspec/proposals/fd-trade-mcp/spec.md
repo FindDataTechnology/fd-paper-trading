@@ -1,4 +1,4 @@
-# fd-trade-mcp Capability Specification
+# fd-paper-trading-mcp Capability Specification
 
 ## Overview
 
@@ -124,8 +124,8 @@ Untreated exceptions surface as raw error messages to Claude.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `TRADE_API_URL` | No | `http://localhost:8000` | Backend API base URL |
-| `TRADE_API_TOKEN` | Yes | - | JWT auth token for API access |
+| `PAPER_TRADING_API_URL` | No | `http://localhost:8000` | Backend API base URL |
+| `PAPER_TRADING_API_TOKEN` | Yes | - | JWT auth token for API access |
 
 ## Constraints & Assumptions
 
@@ -144,7 +144,7 @@ Untreated exceptions surface as raw error messages to Claude.
 
 ## Testing Checklist
 
-- [ ] Server starts with `fastmcp run src/fd_trade/mcp/server.py`
+- [ ] Server starts with `fastmcp run src/fd_paper_trading/mcp/server.py`
 - [ ] Tool discovery works via `fastmcp inspect`
 - [ ] Each tool callable via `fastmcp call`
 - [ ] Invalid input returns structured errors

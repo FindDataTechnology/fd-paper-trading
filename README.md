@@ -4,7 +4,7 @@
 
 </div>
 
-# fd-trade
+# fd-paper-trading
 
 Multi-tenant **stock paper-trading** service built on [Nautilus Trader](https://nautilustrader.io), exposed via a FastAPI REST + WebSocket API. Users can own multiple paper trading accounts and place orders through the API against real-time market data with **simulated fills** — no broker, no real capital.
 
@@ -46,14 +46,14 @@ cp .env.example .env   # edit DATABASE_URL, JWT_SECRET, market-data keys
 
 # 3. Provision PostgreSQL and apply migrations
 brew services start postgresql@14
-createdb fdtrade
+createdb paper_trading
 uv run alembic upgrade head
 
 # 4. (Optional) Build the web UI so FastAPI serves it at /
 cd web && npm install && npm run build && cd ..
 
 # 5. Run the API (OpenAPI docs at http://localhost:8000/docs)
-uv run fd-trade
+uv run fd-paper-trading
 ```
 
 > **Note:** On macOS with Homebrew, `postgresql@14` may run on port 5433 if 5432 is occupied. Adjust `DATABASE_URL` in `.env` accordingly.
@@ -71,7 +71,7 @@ To trade/backtest on real daily bars from the [fd-open-data-mcp](https://github.
 uv run python scripts/setup_fd_open_data.py
 
 # Then select the provider
-MARKET_DATA_PROVIDER=fd-open-data uv run fd-trade
+MARKET_DATA_PROVIDER=fd-open-data uv run fd-paper-trading
 ```
 
 The bootstrap prints a coverage report mapping the curated symbol universe to ontology entity IDs; unresolved symbols return no bars/quotes until the ontology seeds them (e.g. via the library's `migrate-astock-daily` or entity import commands).
@@ -80,7 +80,7 @@ The bootstrap prints a coverage report mapping the curated symbol universe to on
 
 ```bash
 # Terminal 1: FastAPI backend on :8000
-uv run fd-trade
+uv run fd-paper-trading
 
 # Terminal 2: Vite dev server on :5173 (proxies /api and /ws to backend)
 cd web && npm install && npm run dev
@@ -91,7 +91,7 @@ cd web && npm install && npm run dev
 ```bash
 # Build the SPA and serve everything from FastAPI on a single origin
 cd web && npm run build
-uv run fd-trade   # SPA + API + /ws all at http://localhost:8000/
+uv run fd-paper-trading   # SPA + API + /ws all at http://localhost:8000/
 ```
 
 ## Architecture

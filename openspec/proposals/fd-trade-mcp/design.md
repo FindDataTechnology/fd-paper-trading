@@ -1,4 +1,4 @@
-# fd-trade-mcp Design Document
+# fd-paper-trading-mcp Design Document
 
 ## Architecture
 
@@ -17,7 +17,7 @@
                       │ MCP stdio (JSON-RPC)
                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      fd-trade-mcp                               │
+│                      fd-paper-trading-mcp                               │
 │                    FastMCP server                               │
 │                                                                 │
 │  @mcp.tool                                                      │
@@ -30,7 +30,7 @@
 │                                                                 │
 │  ...                                                            │
 │                                                                 │
-│  env: TRADE_API_URL, TRADE_API_TOKEN                           │
+│  env: PAPER_TRADING_API_URL, PAPER_TRADING_API_TOKEN                           │
 └─────────────────────┬───────────────────────────────────────────┘
                       │ HTTP + Bearer Token
                       ▼
@@ -55,7 +55,7 @@
 **Decision:** Single-file MVP (ponytail: no boilerplate scaffolding for `client.py`)
 
 ```
-src/fd_trade/mcp/
+src/fd_paper_trading/mcp/
 └── server.py            # All-in-one: FastMCP tools + HTTP client in one file
 ```
 
@@ -135,11 +135,11 @@ Claude: "Let me check your accounts first..."
 import os
 from pydantic import Field
 
-TRADE_API_URL = os.getenv("TRADE_API_URL", "http://localhost:8000")
-TRADE_API_TOKEN = os.getenv("TRADE_API_TOKEN")  # required, no default
+PAPER_TRADING_API_URL = os.getenv("PAPER_TRADING_API_URL", "http://localhost:8000")
+PAPER_TRADING_API_TOKEN = os.getenv("PAPER_TRADING_API_TOKEN")  # required, no default
 
-if not TRADE_API_TOKEN:
-    raise ValueError("TRADE_API_TOKEN environment variable is required")
+if not PAPER_TRADING_API_TOKEN:
+    raise ValueError("PAPER_TRADING_API_TOKEN environment variable is required")
 ```
 
 **Why prompts are bad:**
@@ -215,7 +215,7 @@ So after `place_order` returns, fills are already embedded. Safe to assume immed
 ### Manual Testing
 ```bash
 # Start MCP server in dev mode
-fastmcp dev src/fd_trade/mcp/server.py
+fastmcp dev src/fd_paper_trading/mcp/server.py
 
 # List tools
 fastmcp inspect http://localhost:8000/mcp
@@ -228,7 +228,7 @@ fastmcp call http://localhost:8000/mcp list_accounts
 ```python
 # tests/unit/mcp/test_server.py
 async def test_place_order_success(mocker):
-    mocker.patch("fd_trade.mcp.client.ApiClient.post", return_value={"id": "x", "status": "FILLED"})
+    mocker.patch("fd_paper_trading.mcp.client.ApiClient.post", return_value={"id": "x", "status": "FILLED"})
     result = await place_order("uuid", "AAPL", "BUY", "MARKET", Decimal("1"))
     assert result["status"] == "FILLED"
 ```
@@ -266,7 +266,7 @@ async def test_place_order_success(mocker):
 ```python
 from fastmcp import FastMCP
 
-mcp = FastMCP("fd-trade")
+mcp = FastMCP("fd-paper-trading")
 
 @mcp.tool
 def my_tool(arg1: str, arg2: int = 10) -> str:
