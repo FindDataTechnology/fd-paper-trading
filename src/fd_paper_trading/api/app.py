@@ -39,6 +39,11 @@ def _default_web_dist() -> Path:
 
 
 @asynccontextmanager
+async def _null_async():
+    yield
+
+
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     await app.state.realtime.start()
     # Resume live paper runs that were active when the process last exited
@@ -70,11 +75,29 @@ def create_app(
     settings = get_settings()
     url = database_url or settings.database_url
 
+    # MCP's streamable-HTTP session manager needs its own lifespan; compose
+    # it with the app's own so one process serves REST, /ws, SPA and /mcp.
+    mcp_lifespan = None
+    mcp_asgi = None
+    try:
+        from ..mcp.server import mcp as _mcp
+
+        mcp_asgi = _mcp.http_app(path="/")
+        mcp_lifespan = mcp_asgi.lifespan
+    except Exception:  # pragma: no cover - MCP is optional for API-only use
+        pass
+
+    @asynccontextmanager
+    async def combined_lifespan(a: FastAPI):
+        async with mcp_lifespan(a) if mcp_lifespan is not None else _null_async():
+            async with lifespan(a):
+                yield
+
     app = FastAPI(
         title="fd-paper-trading paper trading API",
         version="0.1.0",
         description="Multi-tenant paper-trading service with simulated fills.",
-        lifespan=lifespan,
+        lifespan=combined_lifespan,
     )
     app.state.db: Database = create_database(
         url, pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow
@@ -110,6 +133,12 @@ def create_app(
     @app.get("/health", tags=["meta"])
     async def health() -> dict:
         return {"status": "ok"}
+
+    # ---- MCP surface (streamable HTTP, same process/port) ----
+    # Mounted before the SPA fallback so /mcp is not shadowed. Local stdio
+    # usage (fd_paper_trading.mcp.server via an MCP client) is unaffected.
+    if mcp_asgi is not None:
+        app.mount("/mcp", mcp_asgi)
 
     # ---- SPA static serving (production) ----
     # Only mounted when the built UI exists, so dev/tests without a build are
