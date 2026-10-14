@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import requests
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
 
 PAPER_TRADING_API_URL = os.getenv("PAPER_TRADING_API_URL", "http://localhost:8000")
@@ -52,17 +53,23 @@ def _api_call(
     params: dict | None = None,
     authorization: str | None = None,
 ) -> tuple[bool, dict]:
-    """Helper for REST API calls. Returns (success, result)."""
+    """Helper for REST API calls. Returns (success, result).
+
+    Authorization failures — no usable credential at all, or a credential the
+    API rejects with 401 — are raised as ``ToolError`` so they reach the caller
+    as a *failed* tool result rather than an ordinary one: a consuming platform
+    retires a stored credential only on an error result whose text carries the
+    rejection, and a caller must never mistake "credential refused" for "you
+    have no data" (list-shaped tools would otherwise return an empty list).
+    Every other failure stays a structured result so the model can self-repair
+    (validation fields, unknown symbol, …).
+    """
     bearer = authorization if authorization is not None else _resolve_credential()
     if not bearer:
-        return False, {
-            "error": True,
-            "code": "missing_credential",
-            "message": (
-                "No credential: present an Authorization header (HTTP transport) "
-                "or configure PAPER_TRADING_API_TOKEN (stdio transport)"
-            ),
-        }
+        raise ToolError(
+            "missing_credential: no credential — present an Authorization header "
+            "(HTTP transport) or configure PAPER_TRADING_API_TOKEN (stdio transport)"
+        )
     headers = {
         "Authorization": bearer if bearer.startswith("Bearer ") else f"Bearer {bearer}",
         "Content-Type": "application/json",
@@ -83,6 +90,23 @@ def _api_call(
         resp.raise_for_status()
         return True, resp.json() if resp.content else {}
     except requests.exceptions.HTTPError as e:
+        # `if e.response` is WRONG here: requests' Response.__bool__ is
+        # self.ok — an error-status response (401) is FALSY, so the truthiness
+        # test would silently take the `else 500` branch and the credential
+        # rejection would fall through to the structured-body path as an
+        # ordinary result. Identity check, always.
+        status = e.response.status_code if e.response is not None else 500
+        if status == 401:
+            # Deliberately an error result (isError=true on the wire) whose text
+            # carries the 401 wording: the platform's stale-flip keys on both.
+            # Checked BEFORE the structured-body path — the API's 401 body is
+            # itself structured, and as an ordinary result it would be
+            # indistinguishable from success (list tools would read "empty").
+            raise ToolError(
+                "401 unauthorized: the paper-trading credential was rejected "
+                "(revoked or invalid). Mint a fresh token on the service web and "
+                "reconnect it."
+            ) from e
         # Surface the standardized {"error": {code, message, fields}} body so
         # the LLM can self-repair (e.g. spec validation fields on 422).
         if e.response is not None:
@@ -92,11 +116,8 @@ def _api_call(
                 body = None
             if isinstance(body, dict):
                 return False, {"error": True, **body}
-        status = e.response.status_code if e.response else 500
         if status == 404:
             return False, {"error": True, "code": "not_found", "message": "Resource not found"}
-        if status == 401:
-            return False, {"error": True, "code": "unauthorized", "message": "Credential rejected by the API"}
         return False, {"error": True, "code": "api_error", "message": str(e)}
     except requests.exceptions.RequestException as e:
         return False, {"error": True, "code": "connection_error", "message": str(e)}

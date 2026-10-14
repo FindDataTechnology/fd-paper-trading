@@ -15,6 +15,7 @@ import time
 
 import pytest
 import requests
+from fastmcp.exceptions import ToolError
 
 os.environ.setdefault("PAPER_TRADING_API_TOKEN", "placeholder")  # module import
 os.environ["NO_PROXY"] = "127.0.0.1,localhost"
@@ -188,9 +189,40 @@ def test_headerless_call_uses_fallback_token(live_server, two_users):
 
 def test_no_credential_anywhere_fails_closed(live_server):
     mcp_server.PAPER_TRADING_API_TOKEN = None
-    success, data = mcp_server._api_call("GET", "/api/v1/accounts")
-    assert success is False
-    assert data["code"] == "missing_credential"
+    # An error-flagged tool result, not an ordinary one: the consuming platform
+    # retires credentials on failures, and list tools must not read as "empty".
+    with pytest.raises(ToolError, match="missing_credential"):
+        mcp_server._api_call("GET", "/api/v1/accounts")
+
+
+def test_revoked_credential_fails_as_error_not_empty(live_server, two_users):
+    """A rejected credential must surface as a tool error carrying 401 wording.
+
+    The platform's stale-credential flip keys on a failed tool result whose text
+    matches /\\b401\\b|unauthoriz/i; returning [] would read as "no accounts"
+    and hide the rejection (the exact silent failure this asserts against).
+    """
+    alice_jwt, alice_token = two_users["alice@x.io"]
+    # Create an account so a working call would return a non-empty list.
+    _tool_call(live_server, alice_token, mcp_server.create_account, "revoke-me")
+
+    r = requests.get(
+        f"{live_server}/api/v1/tokens",
+        headers={"Authorization": f"Bearer {alice_jwt}"},
+        timeout=5,
+    )
+    token_id = next(t["id"] for t in r.json() if t.get("revoked_at") is None)
+    r = requests.delete(
+        f"{live_server}/api/v1/tokens/{token_id}",
+        headers={"Authorization": f"Bearer {alice_jwt}"},
+        timeout=5,
+    )
+    assert r.status_code == 204, r.text
+
+    with pytest.raises(ToolError) as excinfo:
+        _tool_call(live_server, alice_token, mcp_server.list_accounts)
+    text = str(excinfo.value)
+    assert "401" in text and "unauthoriz" in text.lower(), text
 
 
 def test_new_tools_present(live_server):

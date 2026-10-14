@@ -97,7 +97,11 @@ present.
 Tool failures SHALL be returned to the caller as structured results carrying a machine
 code and message (and field-level detail where the API provides it), so a model can correct
 its arguments and retry in the same conversation. Authorization failures SHALL be returned
-distinguishably from validation failures.
+distinguishably from validation failures **and SHALL be raised as failed tool results**
+(error-flagged, carrying the rejection wording) rather than ordinary ones, so a consuming
+platform can detect the rejection and retire the stored credential, and so no caller can
+mistake a refused credential for an empty result. No tool SHALL convert an authorization
+failure into an empty success value.
 
 #### Scenario: Validation error enumerates fields
 
@@ -108,6 +112,20 @@ distinguishably from validation failures.
 
 - **WHEN** the upstream API rejects the credential
 - **THEN** the result reports an authorization code rather than a generic failure
+
+#### Scenario: Authorization failure is a failed result
+
+- **WHEN** the upstream API answers a tool call with 401
+- **THEN** the tool call fails as an error (not an ordinary result), and the failure text
+  carries the authorization wording, so a consuming platform can retire the credential
+
+#### Scenario: List tools do not swallow authorization failures
+
+- **WHEN** a list-shaped tool (`list_accounts`, `list_orders`, `list_positions`,
+  `list_strategies`, `list_strategy_runs`, `get_bars`, `search_instruments`) is called
+  with a credential the API rejects
+- **THEN** the call fails rather than returning an empty list, because an empty list
+  would read as "no data" and hide the credential failure
 
 ### Requirement: 上牌 manifest and selfcheck
 
