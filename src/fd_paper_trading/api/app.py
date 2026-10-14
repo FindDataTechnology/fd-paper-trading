@@ -73,7 +73,7 @@ def create_app(
     app = FastAPI(
         title="fd-paper-trading paper trading API",
         version="0.1.0",
-        description="Multi-tenant stock paper-trading service built on Nautilus Trader.",
+        description="Multi-tenant paper-trading service with simulated fills.",
         lifespan=lifespan,
     )
     app.state.db: Database = create_database(

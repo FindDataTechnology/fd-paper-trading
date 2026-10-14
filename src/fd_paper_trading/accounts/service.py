@@ -1,6 +1,6 @@
 """Account management service: creation, balances, summary, reset.
 
-Owns the transaction boundary for account mutations. The Nautilus execution
+Owns the transaction boundary for account mutations. The fill-engine execution
 engine is the live trading cache; Postgres (via this service) is the durable
 source of truth.
 """

@@ -1,7 +1,7 @@
 [project]
 name = "fd-paper-trading"
 version = "0.1.0"
-description = "Multi-tenant stock paper-trading service built on Nautilus Trader"
+description = "Multi-tenant paper-trading service with simulated fills"
 readme = "README.md"
 authors = [
     { name = "shichengsi", email = "1253774197@qq.com" }
@@ -22,7 +22,6 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
-    "nautilus_trader>=1.200.0",
     "requests>=2.31",
     "fastmcp>=2.5.3",
     # Library import of the open-data ontology (read_range bulk series API is
@@ -48,11 +47,7 @@ build-backend = "uv_build"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-q"
-filterwarnings = [
-    # Nautilus's BacktestEngine.run() calls pandas Timestamp.utcnow() internally;
-    # not patchable upstream. Match the exact message so other deprecations still show.
-    "ignore:Timestamp.utcnow is deprecated",
-]
+filterwarnings = []
 
 [tool.uv]
 package = true

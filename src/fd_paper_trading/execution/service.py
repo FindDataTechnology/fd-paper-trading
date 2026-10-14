@@ -141,7 +141,7 @@ class PaperExecutionService:
                     "insufficient_buying_power", "Not enough cash for this order"
                 )
 
-        instrument_id = str(instrument.id)  # e.g. "AAPL.SIM"
+        instrument_id = instrument.symbol_id  # e.g. "AAPL.SIM"
         order = Order(
             account_id=account.id,
             user_id=account.user_id,

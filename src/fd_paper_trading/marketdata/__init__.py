@@ -1,6 +1,6 @@
 """Market-data ingestion.
 
-A provider supplies quotes and Nautilus instruments for symbols. Implementations:
+A provider supplies quotes and instruments for symbols. Implementations:
 - ``SimulatedMarketDataProvider``: deterministic synthetic quotes (tests/dev).
 - ``PolygonMarketDataProvider``: real end-of-day prices from Polygon.io (free tier).
 - ``FdOpenDataMarketDataProvider``: real daily bars from the fd-open-data-mcp

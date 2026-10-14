@@ -12,17 +12,10 @@ from __future__ import annotations
 
 import time
 from decimal import Decimal
-from typing import TYPE_CHECKING
-
 import httpx
 
-from .provider import MarketDataProvider, Quote
+from .provider import Instrument, MarketDataProvider, Quote
 from .simulated import SIM_VENUE, SimulatedMarketDataProvider
-
-if TYPE_CHECKING:
-    # Annotation-only; kept lazy so importing this module never pulls in the
-    # heavy nautilus_trader package (keeps sandbox subprocess spawn cheap).
-    from nautilus_trader.model.instruments import Instrument
 
 # Half-spread as a fraction of price (5 bps each side => 10 bps total),
 # with a $0.01 floor so bid != ask even for very low-priced stocks.

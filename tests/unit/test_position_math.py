@@ -1,7 +1,7 @@
 """Unit tests for signed-quantity position PnL math.
 
 Exercises ``PaperExecutionService._update_position`` directly - no HTTP, no
-database, no Nautilus engine. This is the highest-risk accounting logic.
+database, no matching engine. This is the highest-risk accounting logic.
 """
 
 from decimal import Decimal

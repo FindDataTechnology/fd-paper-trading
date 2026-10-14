@@ -7,22 +7,15 @@ import random
 import time
 from decimal import Decimal
 from functools import lru_cache
-from typing import TYPE_CHECKING
 
 from .provider import (
     Bar,
     DEFAULT_BAR_LIMIT,
+    Instrument,
     MarketDataProvider,
     Quote,
     SUPPORTED_TIMEFRAMES,
 )
-
-if TYPE_CHECKING:
-    # Annotation-only; the runtime TestInstrumentProvider import is deferred
-    # into _instrument() so importing this module never pulls in nautilus_trader
-    # (keeps sandbox subprocess spawn cheap; the SIM provider is the default
-    # in tests, so this is the hottest import to keep light).
-    from nautilus_trader.model.instruments import Instrument
 
 SIM_VENUE = "SIM"
 
@@ -58,7 +51,7 @@ class SimulatedMarketDataProvider(MarketDataProvider):
     """Returns a stable, deterministic quote per symbol (no external feed).
 
     The base price is derived from the symbol so tests are reproducible; bid/ask
-    straddle it. Instruments are Nautilus ``Equity`` objects on the ``SIM`` venue.
+    straddle it. Instruments are this service's own value type on the ``SIM`` venue.
     ``search_instruments`` filters a static universe; ``get_bars`` synthesizes a
     deterministic, symbol-seeded OHLCV series so charts render reproducibly.
     """
@@ -75,10 +68,15 @@ class SimulatedMarketDataProvider(MarketDataProvider):
     @lru_cache(maxsize=256)
     def _instrument(symbol: str) -> Instrument:
         # Instruments sit on the order hot path; building one per call is waste.
-        # Deferred import so module import stays nautilus-free (see header).
-        from nautilus_trader.test_kit.providers import TestInstrumentProvider
-
-        return TestInstrumentProvider.equity(symbol=symbol, venue=SIM_VENUE)
+        name = next(
+            (n for s, n in _INSTRUMENT_UNIVERSE if s == symbol.upper()), symbol.upper()
+        )
+        return Instrument(
+            symbol=symbol.upper(),
+            symbol_id=f"{symbol.upper()}.{SIM_VENUE}",
+            venue=SIM_VENUE,
+            name=name,
+        )
 
     def get_instrument(self, symbol: str) -> Instrument | None:
         return self._instrument(symbol)

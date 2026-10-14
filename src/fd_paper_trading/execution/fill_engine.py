@@ -8,10 +8,9 @@ side), so a fill is fully determined by arithmetic against that one quote:
   limit buy    -> fills at ask iff limit >= ask, else rests OPEN
   limit sell   -> fills at bid iff limit <= bid, else rests OPEN
 
-No queueing, no partial fills, no slippage, no price movement — Nautilus's
-matching engine (the old per-order ``BacktestEngine``) produced exactly this
-result at ~1000x the cost. This is the paper-only calculator; the real
-matching engine (D10) belongs to the live ``TradingNode``.
+No queueing, no partial fills, no slippage, no price movement — a full
+matching engine would produce exactly this result at ~1000x the cost for
+this paper-only calculator.
 """
 
 from dataclasses import dataclass

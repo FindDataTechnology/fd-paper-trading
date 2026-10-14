@@ -262,7 +262,7 @@ class PaperRunSupervisor:
 
             instrument = provider.get_instrument(spec.symbol)
             instrument_id = (
-                str(instrument.id) if instrument is not None else f"{spec.symbol}.SIM"
+                instrument.symbol_id if instrument is not None else f"{spec.symbol}.SIM"
             )
             position = await PositionRepository(session).get(account.id, instrument_id)
             position_qty = position.quantity if position is not None else Decimal("0")

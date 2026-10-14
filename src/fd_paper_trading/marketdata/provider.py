@@ -4,14 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    # Used only as a return-type annotation on get_instrument/search_instruments;
-    # kept under TYPE_CHECKING so importing this module (and the Bar dataclass
-    # used by the sandbox subprocess) never pulls in the heavy nautilus_trader
-    # package. This keeps sandbox subprocess spawn cheap (~tens of ms).
-    from nautilus_trader.model.instruments import Instrument
 
 # Supported bar timeframes for historical OHLCV requests, mapped to their
 # duration in seconds. The set is enforced by the bars endpoint.
@@ -24,6 +16,28 @@ SUPPORTED_TIMEFRAMES: dict[str, int] = {
 }
 DEFAULT_BAR_LIMIT = 200
 MAX_BAR_LIMIT = 1_000
+
+
+@dataclass(frozen=True)
+class Instrument:
+    """A tradable instrument as this service understands it.
+
+    ``symbol_id`` is the order-book identifier recorded on orders, fills and
+    positions — the ``SYMBOL.VENUE`` form (e.g. ``AAPL.SIM``). ``price_tick``
+    and ``size_increment`` carry the precision used when quantizing fills;
+    everything else is descriptive.
+    """
+
+    symbol: str
+    symbol_id: str
+    venue: str
+    name: str = ""
+    asset_class: str = "equity"
+    price_tick: Decimal = Decimal("0.01")
+    size_increment: Decimal = Decimal("1")
+
+    def __str__(self) -> str:
+        return self.symbol_id
 
 
 @dataclass(frozen=True)
@@ -60,10 +74,10 @@ class Bar:
 class MarketDataProvider:
     """Abstract market-data provider.
 
-    Implementations return the latest quote for a symbol and the Nautilus
-    ``Instrument`` describing it. ``get_quote`` returns ``None`` when no live
-    quote is available (a data gap). ``search_instruments`` and ``get_bars``
-    support the web UI's symbol search and charting.
+    Implementations return the latest quote for a symbol and the service's
+    own ``Instrument`` describing it. ``get_quote`` returns ``None`` when no
+    live quote is available (a data gap). ``search_instruments`` and
+    ``get_bars`` support the web UI's symbol search and charting.
     """
 
     async def get_quote(self, symbol: str) -> Quote | None:

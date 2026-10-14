@@ -1,4 +1,4 @@
-"""Order placement/cancellation with simulated Nautilus fills."""
+"""Order placement/cancellation with simulated fills."""
 
 from decimal import Decimal
 
