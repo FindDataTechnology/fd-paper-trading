@@ -2,7 +2,7 @@
 
 ## Purpose
 
-约束 Web 端账户面：账户切换、开户入口、入金/重置交互与展示。
+约束 Web 端账户面：账户切换器、开户入口（Create account）、入金与重置的交互确认，以及各页面对活跃账户的联动。
 ## Requirements
 
 ### Requirement: Account dashboard

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-约束 Web 端标的搜索：typeahead 交互、大小写不敏感匹配与空查询短路。
+约束 Web 端标的搜索：typeahead 防抖交互、大小写不敏感的符号/名称匹配、空查询短路（不发请求）与选中后联动图表与下单面板。
 ## Requirements
 
 ### Requirement: Symbol search endpoint

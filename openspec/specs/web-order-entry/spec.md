@@ -2,7 +2,7 @@
 
 ## Purpose
 
-约束 Web 端下单面板：市价/限价表单校验、提交反馈与错误呈现。
+约束 Web 端下单面板：市价/限价表单校验（数量与限价规则）、提交反馈（pending 状态与成交结果）、错误呈现（结构化错误码可读化）。
 ## Requirements
 
 ### Requirement: Order ticket

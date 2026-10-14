@@ -2,7 +2,7 @@
 
 ## Purpose
 
-约束移动端 H5 外壳（/m）：自适应布局、与桌面同源同凭据、行情/持仓/订单/策略四 tab。
+约束移动端 H5 外壳（/m）：自适应布局（竖屏底栏单列/横屏侧栏）、与桌面同源同凭据、行情/交易/持仓/订单/策略五 tab 与按 tab 作用域的实时订阅。
 ## Requirements
 
 ### Requirement: Mobile trading route under shared auth
@@ -41,6 +41,15 @@ content filling the remaining width on landscape/tablet viewports (>=768px).
 
 The mobile shell SHALL show an account selector and the active account's
 indicative equity in a sticky top bar, reusing the existing account hooks and
+components.
+
+#### Scenario: Account switcher visible on mobile
+- **WHEN** an authenticated user opens /m
+- **THEN** the top bar shows the account selector and the active account's equity
+
+#### Scenario: Equity reflects the selected account
+- **WHEN** the user switches the active account
+- **THEN** the indicative equity updates to that account's summary
 auto-selecting the first account when none is active.
 
 ### Requirement: Five actionable trading tabs
@@ -76,7 +85,27 @@ The mobile shell SHALL subscribe to quote streams only for the symbols relevant
 to the currently mounted tab, unsubscribing on tab unmount via the ref-counted
 realtime store so that mobile bandwidth and battery use stay bounded.
 
+#### Scenario: Quotes subscribe on tab mount and stop on unmount
+
+- **WHEN** the user switches away from the Watch tab
+- **THEN** the quote subscriptions for that tab's symbols are released via the realtime store
+
+#### Scenario: Order updates keep flowing while the Orders tab is mounted
+
+- **WHEN** an order or fill event arrives while the Orders tab is mounted
+- **THEN** the affected order cards update in place without a refetch
+
 ### Requirement: Desktop entry point and return link
 
 The desktop layout SHALL link to `/m` from its header, and the mobile shell
 SHALL provide a "Desktop" link back to `/` in its top bar.
+
+#### Scenario: Desktop links to mobile
+
+- **WHEN** an authenticated user views the desktop header
+- **THEN** a link to /m is present
+
+#### Scenario: Mobile links back to desktop
+
+- **WHEN** the user taps "Desktop" in the mobile top bar
+- **THEN** the browser navigates to /

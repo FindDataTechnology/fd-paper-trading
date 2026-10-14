@@ -2,7 +2,7 @@
 
 ## Purpose
 
-约束 Web 外壳：受保护路由、登录/注册流、布局导航与登出。
+约束 Web 外壳与认证路由：受保护路由跳转、登录/注册流与错误呈现、桌面布局导航与登出、桌面与移动入口互通。
 ## Requirements
 
 ### Requirement: Single-page application shell

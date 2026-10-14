@@ -2,7 +2,7 @@
 
 ## Purpose
 
-约束纸面账户域模型：多账户归属、开户初始资金、充值/重置语义与现金账本事务。
+约束纸面账户域模型：多账户归属、开户初始资金（默认 10 万虚拟资金）、充值/重置语义与现金账本事务。
 ## Requirements
 ### Requirement: Multi-account ownership
 
