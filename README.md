@@ -1,20 +1,21 @@
 <div align="center">
 
-**[English](./README.md)** | **[中文](./README_zh.md)**
+**[English](./README.md)** | **[中文](./README.zh-CN.md)**
 
 </div>
 
 # fd-paper-trading
 
-Multi-tenant **stock paper-trading** service built on [Nautilus Trader](https://nautilustrader.io), exposed via a FastAPI REST + WebSocket API. Users can own multiple paper trading accounts and place orders through the API against real-time market data with **simulated fills** — no broker, no real capital.
+Multi-tenant **paper-trading** service exposed via a FastAPI REST + WebSocket API and an MCP server. Users can own multiple paper trading accounts and place orders through the API against real-time market data with **simulated fills** — no broker, no real capital.
 
 ## Features
 
 - **Multi-user auth** — JWT + revocable API tokens (`fdt_` prefix)
 - **Multi-account management** — each user can create and manage multiple isolated paper accounts
-- **Order execution** — market and limit orders with simulated fills via Nautilus Trader's matching engine
+- **Order execution** — market and limit orders with simulated fills via a stateless pure-Python fill calculator
 - **Position & cash ledgering** — real-time P&L, average cost, realized gains
 - **Real-time streaming** — WebSocket endpoint (`/ws`) pushes live quotes, order-status, and fill events
+- **MCP server** — 19 tools (accounts, orders, positions, instrument search, bars, strategy lifecycle) on stdio and streamable HTTP. Caller identity is delegated: HTTP callers present their own `Authorization` credential and act as themselves on a shared deployment; stdio falls back to the configured token
 - **Market data** — `SimulatedMarketDataProvider` (deterministic, for dev/tests), `PolygonMarketDataProvider` (real prices, end-of-day on free tier), and `FdOpenDataMarketDataProvider` (real daily bars + close-derived quotes from the [fd-open-data-mcp](https://github.com/FindDataTechnology/fd-open-data-mcp) ontology)
 - **Quant strategies** - dual-track authoring: fixed templates (SMA cross, RSI reversion, Bollinger breakout, MACD cross, DCA) and sandboxed custom code (`on_bar(ctx)`); backtest with equity-curve stats; live paper runs that place attributed signals on your account. Per-user group limits (active strategies, daily orders, custom-code gate, symbol allowlist)
 - **Web UI** — React + TypeScript SPA with professional trading dashboard featuring:
@@ -23,7 +24,6 @@ Multi-tenant **stock paper-trading** service built on [Nautilus Trader](https://
   - **Position management**: quick close/reduce actions with confirmation dialogs
   - **Daily P&L tracking**: real-time calculation from realized + unrealized components
   - **Strategies pages**: create/edit strategies (template param form or code editor), run backtests with equity curves, and monitor live paper runs + history
-  - **AI Chat Assistant**: conversational interface for placing orders, checking accounts, and managing trades
   - **Typeahead symbol search**, interactive charts (TradingView `lightweight-charts`), and live streaming
 
 ## Tech Stack
@@ -31,7 +31,7 @@ Multi-tenant **stock paper-trading** service built on [Nautilus Trader](https://
 - **Backend:** Python 3.12+, FastAPI + Uvicorn, SQLAlchemy 2.0 async, Alembic
 - **Database:** PostgreSQL (prod) / SQLite (tests)
 - **Auth:** JWT (`python-jose`) + bcrypt + revocable API tokens
-- **Execution:** Nautilus Trader (matching engine as stateless fill calculator)
+- **Execution:** stateless pure-Python fill calculator (no trading framework)
 - **Frontend:** React 18 + TypeScript + Vite, TanStack Query + Zustand, TradingView `lightweight-charts`
 - **Testing:** pytest (backend), Vitest + React Testing Library (frontend), Playwright (e2e)
 
@@ -125,12 +125,12 @@ uv run fd-paper-trading   # SPA + API + /ws all at http://localhost:8000/
         ┌────────────┼────────────┐
         ▼            ▼            ▼
 ┌──────────┐  ┌──────────┐  ┌──────────┐
-│PostgreSQL│  │  Nautilus │  │  Market  │
+│PostgreSQL│  │  Filling │  │  Market  │
 │(ledger)  │  │  (fills)  │  │  Data    │
 └──────────┘  └──────────┘  └──────────┘
 ```
 
-**Execution model (v1):** Fills are computed by Nautilus Trader's matching engine via a stateless `BacktestEngine`-based fill calculator — one engine per order, `bypass_logging=True`. Account state lives in the database, isolated by `account_id`. The live `TradingNode` + `SandboxLiveExecClientFactory` are deferred.
+**Execution model (v1):** Fills are computed by a stateless pure-Python calculator (one quote + one order in, fill outcome out). Account state lives in the database, isolated by `account_id`.
 
 ## Trading Dashboard
 
@@ -159,39 +159,6 @@ The web UI provides a professional trading workspace optimized for active tradin
 - **Daily P&L**: Real-time calculation from realized gains + unrealized mark-to-market
 
 **Note:** Daily P&L is indicative (frontend-calculated) and may differ slightly from backend calculations. Mobile-responsive layout and user-configurable watchlists are planned for future releases.
-
-## AI Chat Assistant
-
-The web UI includes an AI-powered chat assistant that allows you to interact with the trading system using natural language. Powered by OpenAI and CopilotKit, the assistant can:
-
-- **Place orders**: "Buy 100 shares of AAPL at market price"
-- **Check account balance**: "What's my cash balance?"
-- **View positions**: "Show my open positions"
-- **Cancel orders**: "Cancel my TSLA order"
-- **Get market insights**: "What's the current price of NVDA?"
-
-### Using the Chat Assistant
-
-1. Click the 💬 **Chat** button in the top navigation bar
-2. Type your request in the chat input
-3. The AI will process your request and execute the appropriate trading operation
-4. You'll see a confirmation with the results
-
-### Configuration
-
-The chat assistant requires an OpenAI API key. Set it in your `.env` file:
-
-```bash
-OPENAI_API_KEY=your_openai_api_key_here
-```
-
-You can also configure the model (default is `gpt-3.5-turbo`):
-
-```bash
-OPENAI_MODEL=gpt-4  # or gpt-3.5-turbo
-```
-
-**Note:** The chat assistant uses your active account context automatically. All operations are authenticated and authorized - you can only trade your own accounts.
 
 ## Commands
 
@@ -253,4 +220,4 @@ Please ensure your code follows the existing style and all tests pass before sub
 
 ## License
 
-This project is proprietary software. All rights reserved.
+MIT — see [LICENSE](./LICENSE).

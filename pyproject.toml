@@ -3,6 +3,7 @@ name = "fd-paper-trading"
 version = "0.1.0"
 description = "Multi-tenant paper-trading service with simulated fills"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "shichengsi", email = "1253774197@qq.com" }
 ]

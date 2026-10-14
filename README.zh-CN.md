@@ -1,18 +1,18 @@
 <div align="center">
 
-**[English](./README.md)** | **[中文](./README_zh.md)**
+**[English](./README.md)** | **[中文](./README.zh-CN.md)**
 
 </div>
 
 # fd-paper-trading
 
-基于 [Nautilus Trader](https://nautilustrader.io) 构建的多租户**股票模拟交易**服务，通过 FastAPI REST + WebSocket API 对外提供服务。用户可以拥有多个模拟交易账户，通过 API 对实时市场数据进行下单，使用**模拟撮合**成交 —— 无需券商，无需真实资金。
+多租户**模拟交易（paper trading）**服务，通过 FastAPI REST + WebSocket API 与 MCP server 对外提供服务。用户可以拥有多个模拟交易账户，通过 API 对实时市场数据进行下单，使用**模拟撮合**成交 —— 无需券商，无需真实资金。
 
 ## 功能特性
 
 - **多用户认证** — JWT + 可撤销的 API Token（`fdt_` 前缀）
 - **多账户管理** — 每个用户可以创建和管理多个隔离的模拟账户
-- **订单执行** — 市价单和限价单，通过 Nautilus Trader 撮合引擎进行模拟成交
+- **订单执行** — 市价单和限价单，通过无状态纯 Python 撮合计算器进行模拟成交
 - **持仓与资金账本** — 实时盈亏、平均成本、已实现收益
 - **实时推送** — WebSocket 端点（`/ws`）推送实时行情、订单状态和成交事件
 - **市场数据** — `SimulatedMarketDataProvider`（确定性，用于开发/测试）和 `PolygonMarketDataProvider`（真实价格，免费套餐为收盘价）
@@ -29,7 +29,7 @@
 - **后端：** Python 3.12+、FastAPI + Uvicorn、SQLAlchemy 2.0 async、Alembic
 - **数据库：** PostgreSQL（生产）/ SQLite（测试）
 - **认证：** JWT（`python-jose`）+ bcrypt + 可撤销 API Token
-- **执行引擎：** Nautilus Trader（撮合引擎作为无状态成交计算器）
+- **执行引擎：** 无状态纯 Python 撮合计算器（不依赖任何交易框架）
 - **前端：** React 18 + TypeScript + Vite、TanStack Query + Zustand、TradingView `lightweight-charts`
 - **测试：** pytest（后端）、Vitest + React Testing Library（前端）、Playwright（端到端）
 
@@ -97,12 +97,12 @@ uv run fd-paper-trading   # SPA + API + /ws 全部在 http://localhost:8000/
         ┌────────────┼────────────┐
         ▼            ▼            ▼
 ┌──────────┐  ┌──────────┐  ┌──────────┐
-│PostgreSQL│  │  Nautilus │  │  Market  │
+│PostgreSQL│  │  撮合计算  │  │  行情  │
 │(账本)    │  │  (撮合)   │  │  Data    │
 └──────────┘  └──────────┘  └──────────┘
 ```
 
-**执行模型（v1）：** 成交通过 Nautilus Trader 的撮合引擎计算，使用无状态的 `BacktestEngine` 成交计算器 —— 每个订单一独立引擎，`bypass_logging=True`。账户状态存储在数据库中，按 `account_id` 隔离。实时的 `TradingNode` + `SandboxLiveExecClientFactory` 暂未实现。
+**执行模型（v1）：** 成交由无状态纯 Python 计算器完成（一条报价 + 一张订单 → 成交结果）。账户状态存储在数据库中，按 `account_id` 隔离。
 
 ## 交易工作台
 
@@ -131,39 +131,6 @@ Web 界面提供专业交易工作台，为活跃交易优化：
 - **每日盈亏**：基于已实现收益 + 未实现盯市盈亏的实时计算
 
 **说明：** 每日盈亏为参考值（前端计算），可能与后端计算略有差异。移动端响应式布局和用户自定义自选股列表将在未来版本中实现。
-
-## AI 聊天助手
-
-Web 界面包含一个 AI 驱动的聊天助手，允许您使用自然语言与交易系统交互。由 OpenAI 和 CopilotKit 提供支持，助手可以：
-
-- **下单**："买入 100 股 AAPL，市价单"
-- **查询账户余额**："我的现金余额是多少？"
-- **查看持仓**："显示我的持仓"
-- **取消订单**："取消我的 TSLA 订单"
-- **获取市场信息**："NVDA 当前价格是多少？"
-
-### 使用聊天助手
-
-1. 点击顶部导航栏的 💬 **聊天** 按钮
-2. 在聊天输入框中输入您的请求
-3. AI 将处理您的请求并执行相应的交易操作
-4. 您将看到包含结果的确认信息
-
-### 配置
-
-聊天助手需要 OpenAI API 密钥。在 `.env` 文件中设置：
-
-```bash
-OPENAI_API_KEY=your_openai_api_key_here
-```
-
-您还可以配置模型（默认为 `gpt-3.5-turbo`）：
-
-```bash
-OPENAI_MODEL=gpt-4  # 或 gpt-3.5-turbo
-```
-
-**说明：** 聊天助手会自动使用您的活跃账户上下文。所有操作都经过认证和授权 - 您只能交易自己的账户。
 
 ## 常用命令
 
@@ -225,4 +192,4 @@ cd web && npm run dev            # 开发服务器（热重载）
 
 ## 许可证
 
-本项目为专有软件。保留所有权利。
+MIT —— 见 [LICENSE](./LICENSE)。
