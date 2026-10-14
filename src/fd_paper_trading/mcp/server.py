@@ -1,28 +1,70 @@
-"""fd-paper-trading MCP server: expose paper-trading operations as Claude tools."""
+"""fd-paper-trading MCP server: expose paper-trading operations as tools.
+
+Caller identity is delegated: each tool forwards the inbound request's
+``Authorization`` credential to the REST API, so on a shared deployment every
+caller acts as their own user. When a request carries no credential — the
+stdio case — the operator-configured ``PAPER_TRADING_API_TOKEN`` is used.
+"""
 
 import os
 from decimal import Decimal
 
 import requests
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_http_request
 
-# ponytail: env var auth only - no prompts, just configure once in settings.json
 PAPER_TRADING_API_URL = os.getenv("PAPER_TRADING_API_URL", "http://localhost:8000")
+# Fallback for headerless transports (stdio). HTTP callers must present their
+# own credential; it is never substituted by this shared token.
 PAPER_TRADING_API_TOKEN = os.getenv("PAPER_TRADING_API_TOKEN")
-
-if not PAPER_TRADING_API_TOKEN:
-    raise RuntimeError(
-        "PAPER_TRADING_API_TOKEN environment variable is required. "
-        "Configure it in your Claude settings under mcpServers.fd-paper-trading.env"
-    )
 
 mcp = FastMCP("fd-paper-trading")
 
 
-def _api_call(method: str, endpoint: str, json_data: dict | None = None, params: dict | None = None) -> tuple[bool, dict]:
+def _inbound_bearer() -> str | None:
+    """The caller's own credential from the raw HTTP request, if any.
+
+    fastmcp's ``get_http_headers()`` strips Authorization, so read the raw
+    ASGI request instead (same trap as facet-ops-mcp's tools_market). Raises
+    when there is no request context (stdio) — that just means no header.
+    """
+    try:
+        request = get_http_request()
+    except RuntimeError:
+        return None
+    if request is None:
+        return None
+    auth = (request.headers.get("Authorization") or "").strip()
+    if not auth:
+        return None
+    return auth
+
+
+def _resolve_credential() -> str | None:
+    """Inbound credential wins; the configured token covers headerless stdio."""
+    return _inbound_bearer() or PAPER_TRADING_API_TOKEN
+
+
+def _api_call(
+    method: str,
+    endpoint: str,
+    json_data: dict | None = None,
+    params: dict | None = None,
+    authorization: str | None = None,
+) -> tuple[bool, dict]:
     """Helper for REST API calls. Returns (success, result)."""
+    bearer = authorization if authorization is not None else _resolve_credential()
+    if not bearer:
+        return False, {
+            "error": True,
+            "code": "missing_credential",
+            "message": (
+                "No credential: present an Authorization header (HTTP transport) "
+                "or configure PAPER_TRADING_API_TOKEN (stdio transport)"
+            ),
+        }
     headers = {
-        "Authorization": f"Bearer {PAPER_TRADING_API_TOKEN}",
+        "Authorization": bearer if bearer.startswith("Bearer ") else f"Bearer {bearer}",
         "Content-Type": "application/json",
     }
     url = f"{PAPER_TRADING_API_URL}{endpoint}"
@@ -53,6 +95,8 @@ def _api_call(method: str, endpoint: str, json_data: dict | None = None, params:
         status = e.response.status_code if e.response else 500
         if status == 404:
             return False, {"error": True, "code": "not_found", "message": "Resource not found"}
+        if status == 401:
+            return False, {"error": True, "code": "unauthorized", "message": "Credential rejected by the API"}
         return False, {"error": True, "code": "api_error", "message": str(e)}
     except requests.exceptions.RequestException as e:
         return False, {"error": True, "code": "connection_error", "message": str(e)}
@@ -161,6 +205,91 @@ def get_account(account_id: str) -> dict:
     if success:
         return data
     return data
+
+
+@mcp.tool
+def create_account(name: str, starting_balance: Decimal | None = None) -> dict:
+    """Open a new paper account for the authenticated user.
+
+    Use this when the user has no account yet (check with list_accounts first).
+    Accounts start with the deployment's default starting balance when
+    starting_balance is omitted.
+
+    Args:
+        name: Display name for the account (e.g. "main", "strategy-lab")
+        starting_balance: Optional initial virtual cash; defaults to the
+            deployment default
+
+    Returns:
+        The created account with its ID and starting balance.
+        Error dict on failure.
+    """
+    payload: dict = {"name": name}
+    if starting_balance is not None:
+        payload["starting_balance"] = float(starting_balance)
+    success, data = _api_call("POST", "/api/v1/accounts", json_data=payload)
+    if success:
+        return data
+    return data
+
+
+@mcp.tool
+def list_positions(account_id: str) -> list[dict]:
+    """List open positions for an account with quantity, average cost, and P&L.
+
+    Args:
+        account_id: UUID of the account
+
+    Returns:
+        List of positions (symbol, quantity, average price, realized and
+        unrealized P&L). Empty list on error.
+    """
+    success, data = _api_call("GET", f"/api/v1/accounts/{account_id}/positions")
+    if success:
+        return data
+    return []
+
+
+@mcp.tool
+def search_instruments(query: str) -> list[dict]:
+    """Search the tradable instrument universe by symbol or company name.
+
+    Args:
+        query: Case-insensitive symbol or name fragment (e.g. "apple", "AAPL")
+
+    Returns:
+        Matching instruments with symbol, name, and venue. Empty list when
+        nothing matches.
+    """
+    success, data = _api_call(
+        "GET", "/api/v1/instruments/search", params={"q": query}
+    )
+    if success:
+        return data
+    return []
+
+
+@mcp.tool
+def get_bars(symbol: str, timeframe: str = "1d", limit: int = 200) -> list[dict]:
+    """Get historical OHLCV bars for a symbol, oldest-first.
+
+    Args:
+        symbol: Trading symbol (e.g. "AAPL")
+        timeframe: One of 1m, 5m, 15m, 1h, 1d (provider may support a subset)
+        limit: Maximum number of bars (capped by the server)
+
+    Returns:
+        List of bars with ts, open, high, low, close, volume. Empty list on
+        error or data gap.
+    """
+    success, data = _api_call(
+        "GET",
+        f"/api/v1/instruments/{symbol}/bars",
+        params={"timeframe": timeframe, "limit": limit},
+    )
+    if success:
+        return data
+    return []
 
 
 # ---------------------------------------------------------------------------

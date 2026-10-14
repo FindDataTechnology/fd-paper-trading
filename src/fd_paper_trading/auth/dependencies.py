@@ -84,6 +84,10 @@ async def _user_from_api_token(session: AsyncSession, token: str) -> User | None
     # last_used_at is only a diagnostics field; rewrite it at most every
     # N minutes so high-frequency API-token traffic isn't a write per request.
     last = stored.last_used_at
+    # SQLite drops the tzinfo on storage, so a stored value can come back
+    # naive; normalize before comparing with the aware clock.
+    if last is not None and last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
     if last is None or datetime.now(timezone.utc) - last > timedelta(
         minutes=get_settings().api_token_touch_minutes
     ):

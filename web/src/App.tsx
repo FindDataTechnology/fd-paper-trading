@@ -8,7 +8,6 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { useAuth } from "./store/auth";
-import { useUI } from "./store/ui";
 import { useRealtime } from "./realtime/useRealtime";
 import Layout from "./components/Layout";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -20,7 +19,6 @@ import OrderDetailPage from "./pages/OrderDetailPage";
 import InstrumentPage from "./pages/InstrumentPage";
 import StrategiesPage from "./pages/StrategiesPage";
 import StrategyDetailPage from "./pages/StrategyDetailPage";
-import ChatProvider from "./components/ChatProvider";
 import MobileApp from "./mobile/MobileApp";
 
 const queryClient = new QueryClient({
@@ -40,8 +38,6 @@ function RealtimeBridge() {
 }
 
 function AppContent() {
-  const activeAccountId = useUI((s) => s.activeAccountId);
-
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
@@ -57,9 +53,7 @@ function AppContent() {
       <Route
         element={
           <ProtectedRoute>
-            <ChatProvider activeAccountId={activeAccountId || undefined}>
-              <Layout />
-            </ChatProvider>
+            <Layout />
           </ProtectedRoute>
         }
       >
