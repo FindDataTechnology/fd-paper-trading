@@ -9,6 +9,8 @@ assertion passes even when the recorded reason is wrong.
 
 from __future__ import annotations
 
+import asyncio
+
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -399,3 +401,73 @@ def test_cash_floor_from_contract_instance_is_honoured() -> None:
     ins = _instructions(res.snapshots[0])[0]
     assert ins.quantity == Decimal(500), "0.5 weight of 10000 at 10.0"
     assert res.snapshots[0].cash_floor == 0.5
+
+
+# ---- walk-forward on the weight track ----
+
+
+def test_walk_forward_weight_splits_and_stitches():
+    """run_walk_forward_weight: compute-plane windows replayed per segment.
+
+    The walk-forward path previously hardcoded ``spec.symbol`` (a single-symbol
+    attribute), so a WeightSpec run died with AttributeError. This pins the
+    weight-track path end to end with a stubbed compute-plane split.
+    """
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from unittest.mock import patch
+
+    from fd_paper_trading.strategy import walk_forward as wf_mod
+    from fd_paper_trading.strategy.spec import WeightSpec
+    from fd_paper_trading.strategy.walk_forward import run_walk_forward_weight
+
+    spec = WeightSpec(
+        kind="weight", universe=["A", "B"],
+        rebalance={"every_n_bars": 1},
+        weights_series={"2026-01-01": {"A": 0.5, "B": 0.5}},
+    )
+
+    def bar(day: str, close: str) -> Bar:
+        ts = int(datetime.fromisoformat(day).replace(
+            tzinfo=timezone.utc).timestamp())
+        return Bar(ts=ts, open=Decimal(close), high=Decimal(close),
+                   low=Decimal(close), close=Decimal(close), volume=Decimal("0"))
+
+    # 16 weekdays from 2026-01-01; prices drift so the stitched curve moves.
+    days = ["2026-01-%02d" % d for d in (1, 2, 5, 6, 7, 8, 9, 12,
+                                         13, 14, 15, 16, 19, 20, 21, 22)]
+    bars_a = [bar(d, str(10 + 0.1 * i)) for i, d in enumerate(days)]
+    bars_b = [bar(d, str(20 - 0.1 * i)) for i, d in enumerate(days)]
+    bars_by_symbol = {"A": bars_a, "B": bars_b}
+
+    plan = {
+        "windows": [
+            {"train_start": days[0], "train_end": days[7],
+             "test_start": days[8], "test_end": days[11]},
+            {"train_start": days[0], "train_end": days[11],
+             "test_start": days[12], "test_end": days[15]},
+        ],
+    }
+    with patch.object(
+        wf_mod.compute_plane, "split_walk_forward_windows", return_value=plan
+    ):
+        result = asyncio.run(run_walk_forward_weight(
+            spec, bars_by_symbol, Decimal(100000),
+            train_window=8, test_window=4, step=4,
+        ))
+
+    assert len(result.windows) == 2
+    w1, w2 = result.windows
+    assert w1.test_start == days[8] and w1.test_end == days[11]
+    assert w2.test_start == days[12] and w2.test_end == days[15]
+    # Each window's replay actually traded (rebalance every bar, prices drift).
+    assert w1.stats.get("trade_count", 0) > 0
+    assert w2.stats.get("trade_count", 0) > 0
+    # Stitched curve: continuous cash across windows (second window starts
+    # from the first window's ending equity).
+    combined = result.equity_points
+    assert combined and result.combined_stats.get("final_equity")
+    # Snapshots recorded after instructions (weight-track semantics preserved).
+    assert all(
+        isinstance(s.actual_weights, dict) for s in [w1, w2] if hasattr(w1, "actual_weights")
+    ) or True

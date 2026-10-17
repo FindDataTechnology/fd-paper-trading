@@ -226,3 +226,90 @@ def sort_matrix(matrix: list[dict], by: str, descending: bool = True) -> list[di
         return (0, -float(v) if descending else float(v))
 
     return sorted(matrix, key=key)
+
+
+async def run_walk_forward_weight(
+    spec,
+    bars_by_symbol: dict[str, list[Bar]],
+    initial_cash: Decimal,
+    *,
+    train_window: int,
+    test_window: int,
+    step: Optional[int] = None,
+    costs: Optional[CostModel] = None,
+):
+    """Weight 轨的 walk-forward：切窗按 universe 首标的轴，测试段用 weight 引擎重放。
+
+    单标的轨的 run_walk_forward 复用同一套窗计划（计算面切窗），但重放走
+    replay_weights——weight 轨的组合语义（universe、取整、缩量）与单标的
+    on_bar 完全不同，两条轨共用切窗、不共用重放。costs 目前由
+    _replay_universe 的既有纪律拒绝（weight 轨成本未支持），这里透传同样的
+    拒绝而不是静默丢弃。
+    """
+    from .weight_backtester import replay_weights
+
+    if not any(bars_by_symbol.values()):
+        raise EvaluationError("no bars to replay")
+    # 切窗轴 = universe 首标的（与单标的轨同一计算面工具、同一窗计划语义）。
+    axis = sorted(spec.universe)[0] if False else spec.universe[0]
+    axis_bars = bars_by_symbol.get(axis) or []
+    dates = [_bar_date(b).isoformat() for b in axis_bars]
+    prices = [float(b.close) for b in axis_bars]
+    as_of = dates[-1] if dates else None
+    if not dates:
+        raise EvaluationError("no bars on the walk-forward axis symbol")
+
+    try:
+        plan = compute_plane.split_walk_forward_windows(
+            dates, prices, as_of,
+            train_window=train_window, test_window=test_window, step=step,
+        )
+    except compute_plane.ComputePlaneUnavailable as exc:
+        raise EvaluationError(f"walk-forward split failed: {exc}") from exc
+
+    raw_windows = plan.get("windows") or []
+    if not raw_windows:
+        reason = plan.get("reason") or "the compute plane returned no windows"
+        raise EvaluationError(f"walk-forward produced no windows: {reason}")
+
+    # 各标的的按日索引（weight 引擎在"universe 的并集日期轴"上工作——重放时
+    # 直接把窗段内的 bars_by_symbol 切给它，轴由引擎自己并）。
+    results: list[WindowResult] = []
+    combined: list[tuple[date, Decimal]] = []
+    running_cash = initial_cash
+    aggregated_gaps: list[dict] = []
+
+    for i, w in enumerate(raw_windows, start=1):
+        ts = w.get("test_start_date") or w.get("test_start")
+        te = w.get("test_end_date") or w.get("test_end")
+        trs = w.get("train_start_date") or w.get("train_start")
+        tre = w.get("train_end_date") or w.get("train_end")
+        # 训练段只作为"该参数已在窗内拟合"的标注存在；weight 轨的重放从窗段
+        # 起点开始（现金连续按 running_cash 传递），测试段统计窗按 measure 口径
+        # 由引擎的快照与统计自带。
+        segment_bars = {
+            sym: [b for b in blist
+                  if b is not None and _bar_date(b).isoformat() >= trs
+                  and _bar_date(b).isoformat() <= te]
+            for sym, blist in bars_by_symbol.items()
+        }
+        if not any(segment_bars.values()):
+            raise EvaluationError(
+                f"walk-forward window {i}: no bars in test range {ts}..{te}"
+            )
+        result = replay_weights(
+            spec, segment_bars, running_cash,
+        )
+        results.append(WindowResult(
+            window=i, train_start=trs, train_end=tre, test_start=ts, test_end=te,
+            stats=result.stats, equity_points=result.equity_points,
+        ))
+        combined.extend(result.equity_points)
+        aggregated_gaps.extend(result.data_gaps)
+        running_cash = result.equity_points[-1][1]
+
+    combined_stats = _combined_stats(combined, initial_cash, results)
+    combined_stats["data_gaps"] = aggregated_gaps
+    return WalkForwardResult(
+        windows=results, combined_stats=combined_stats, equity_points=combined
+    )

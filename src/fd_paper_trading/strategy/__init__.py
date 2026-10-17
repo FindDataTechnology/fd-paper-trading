@@ -10,7 +10,13 @@ or access ``fd_paper_trading.strategy.PaperRunSupervisor`` (resolved on first us
 from .compute_plane import ComputePlaneUnavailable
 from .costs import CostModel, CostTotals
 from .extended_stats import extended_stats
-from .walk_forward import expand_grid, grid_size, run_walk_forward, sort_matrix
+from .walk_forward import (
+    expand_grid,
+    grid_size,
+    run_walk_forward,
+    run_walk_forward_weight,
+    sort_matrix,
+)
 from .backtester import (
     BacktestResult,
     BarEvaluator,
@@ -86,6 +92,7 @@ __all__ = [
     "ComputePlaneUnavailable",
     "extended_stats",
     "run_walk_forward",
+    "run_walk_forward_weight",
     "expand_grid",
     "grid_size",
     "sort_matrix",

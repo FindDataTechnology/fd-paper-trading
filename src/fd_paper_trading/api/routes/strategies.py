@@ -47,6 +47,7 @@ from ...strategy import (
     replay,
     replay_weights,
     run_walk_forward,
+    run_walk_forward_weight,
     spec_summary,
     validate_spec,
 )
@@ -461,13 +462,40 @@ async def _run_walkforward(app, run, spec, start, end, initial_cash, cost_model,
     那样会让"谁写了这条曲线"变成靠属性名约定。
     """
     days = (end - start).days + 1
-    bars = await app.state.market_data_provider.get_bars(spec.symbol, "1d", days)
+    # Weight 轨没有单一 symbol：walk-forward 在多标的轴上照样成立——切窗按
+    # 主标轴（universe 首标的）切，各窗测试段用各标的自己的 bars 重放。
+    if isinstance(spec, WeightSpec):
+        axis_symbol = spec.universe[0]
+    else:
+        axis_symbol = spec.symbol
+    bars = await app.state.market_data_provider.get_bars(axis_symbol, "1d", days)
     bars = [b for b in bars if start <= _bar_date(b) <= end]
     if not bars:
-        raise EvaluationError(f"no bar data for symbol {spec.symbol} in {start}..{end}")
+        raise EvaluationError(f"no bar data for symbol {axis_symbol} in {start}..{end}")
 
     _assert_no_lookahead([_bar_date(b).isoformat() for b in bars],
-                         end.isoformat(), where=f"symbol {spec.symbol}")
+                         end.isoformat(), where=f"symbol {axis_symbol}")
+
+    if isinstance(spec, WeightSpec):
+        # Weight 轨：universe 逐标的拉齐窗口后走 weight 引擎逐窗重放。
+        days = (end - start).days + 1
+        bars_by_symbol = {}
+        for symbol in spec.universe:
+            sb = await app.state.market_data_provider.get_bars(symbol, "1d", days)
+            bars_by_symbol[symbol] = [b for b in sb if start <= _bar_date(b) <= end]
+        wf_result = await run_walk_forward_weight(
+            spec, bars_by_symbol, initial_cash,
+            train_window=wf["train_window"], test_window=wf["test_window"],
+            step=wf["step"], costs=cost_model,
+        )
+        run.walkforward_windows = [w.to_dict() for w in wf_result.windows]
+        run.stats = wf_result.combined_stats
+        run.cost_config = cost_model.to_dict() if cost_model.enabled else None
+        run.cost_summary = None
+        await _attach_extended_stats(app, run, wf_result.equity_points)
+        await _attach_benchmarks(app, run, wf_result.equity_points, start, end,
+                                 run.params.get("benchmarks"))
+        return wf_result.equity_points
 
     result = await run_walk_forward(
         spec, bars, initial_cash,
