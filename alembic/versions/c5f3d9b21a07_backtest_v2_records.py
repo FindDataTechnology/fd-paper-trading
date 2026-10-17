@@ -41,17 +41,26 @@ _NEW_COLUMNS = (
     "walkforward_windows",
     "param_grid",
     "scan_results",
-    "in_sample",
 )
 
 
 def upgrade() -> None:
-    """Add the v2 record columns; all nullable, no defaults."""
+    """Add the v2 record columns; all nullable, no defaults.
+
+    ``in_sample`` is deliberately NOT in ``_NEW_COLUMNS``: the model declares it
+    ``Boolean`` (the machine-readable in-sample marker is a flag, not a JSON
+    payload), and PostgreSQL enforces the declared type — writing a Python bool
+    into a JSON column raises DatatypeMismatchError on real inserts (SQLite in
+    tests is typeless and hides exactly this drift, which is how it shipped).
+    It gets its own Boolean column below.
+    """
     for name in _NEW_COLUMNS:
         op.add_column("strategy_runs", sa.Column(name, sa.JSON(), nullable=True))
+    op.add_column("strategy_runs", sa.Column("in_sample", sa.Boolean(), nullable=True))
 
 
 def downgrade() -> None:
     """Drop the v2 record columns (existing data in them is discarded)."""
+    op.drop_column("strategy_runs", "in_sample")
     for name in reversed(_NEW_COLUMNS):
         op.drop_column("strategy_runs", name)
