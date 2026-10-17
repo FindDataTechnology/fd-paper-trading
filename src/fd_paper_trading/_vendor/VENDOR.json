@@ -1,0 +1,49 @@
+{
+  "note": "Byte-identical mirror of the fd_quant contract layer. Do not hand-edit vendored files: run scripts/check_contract_drift.py --sync.",
+  "vendored_import_path": "fd_paper_trading._vendor.fd_quant",
+  "upstream_package": "fd-quant",
+  "upstream_version": "0.1.0",
+  "upstream_paths_hint": "fd-quant/{fd_quant/contracts/models.py,schemas/*.json}",
+  "pinned_at": "2026-10-17",
+  "required_api": [
+    "SUPPORTED_SCHEMA_VERSION",
+    "WEIGHT_SUM_TOLERANCE",
+    "ContractError",
+    "TargetWeights",
+    "check_target_weights",
+    "validate",
+    "validate_target_weights"
+  ],
+  "required_weight_sum_tolerance": 1e-09,
+  "local_files_not_vendored": [
+    "README.md",
+    "fd_quant/__init__.py",
+    "fd_quant/contracts/__init__.py"
+  ],
+  "files": [
+    {
+      "vendored": "fd_quant/contracts/models.py",
+      "upstream": "fd_quant/contracts/models.py",
+      "bytes": 21527,
+      "sha256": "d52840562e1071eac293b9c6b5477544ae1bc511c07bcc8634ad4dedbec125c6"
+    },
+    {
+      "vendored": "fd_quant/contracts/unsourced.py",
+      "upstream": "fd_quant/contracts/unsourced.py",
+      "bytes": 1378,
+      "sha256": "3956272384037db3ae7aeb5a9a223517359b9f2a38a88bfd2d08a01666aabb63"
+    },
+    {
+      "vendored": "schemas/rating.schema.json",
+      "upstream": "schemas/rating.schema.json",
+      "bytes": 4300,
+      "sha256": "bb9614ab30dd96c6d8b38d947df3ed73133a74084ac5fb0b443487dc298b8fce"
+    },
+    {
+      "vendored": "schemas/target-weights.schema.json",
+      "upstream": "schemas/target-weights.schema.json",
+      "bytes": 3568,
+      "sha256": "e80165c3cfb90655f8887ade766652a1fd8d06e3444460bb5c3bc143d62e02fb"
+    }
+  ]
+}

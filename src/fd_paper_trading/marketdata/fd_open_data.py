@@ -112,6 +112,98 @@ class FdOpenDataMarketDataProvider(MarketDataProvider):
             )
         return bars
 
+    async def get_bars_with_coverage(self, symbol: str, start: date | str,
+                                     end: date | str) -> dict:
+        """Bars **plus** the window's coverage facts (optional capability).
+
+        This is what the backtest coverage gate consumes. It is deliberately a
+        separate method rather than a change to ``get_daily_bars``'s signature:
+        coverage is a fact only a real data source can report, and the other
+        providers (simulated / polygon-fallback) must not be asked to invent one
+        — a synthetic series that answered "complete" would be the gate vouching
+        for data nobody checked.
+
+        The ``missing`` vs ``market_closed`` split is produced by the DAAS layer
+        (``fd_open_data_mcp.fetch.gapfill``) and consumed here verbatim —
+        re-deriving it in this repo would mean a second copy of the
+        trading-calendar rules, which is exactly what the upstream capability
+        exists to prevent.
+
+        One probe happens as part of this call: missing intervals are asked for
+        once upstream so genuine holidays end up in ``market_closed`` instead of
+        failing every window that contains one. The probe never writes price
+        rows — it only records "asked, empty" — so a coverage check cannot
+        mutate the data it is checking.
+        """
+        start_s, end_s = _normalize_date(start), _normalize_date(end)
+        if start_s > end_s:
+            start_s, end_s = end_s, start_s
+        result = await asyncio.to_thread(
+            self._coverage_sync, symbol, start_s, end_s
+        )
+        bars: list[Bar] = []
+        for d, close in result["closes"]:
+            bars.append(
+                Bar(
+                    ts=_date_to_ts(d),
+                    open=close,
+                    high=close,
+                    low=close,
+                    close=close,
+                    volume=Decimal("0"),
+                )
+            )
+        return {**result, "bars": bars}
+
+    def _coverage_sync(self, symbol: str, start: str, end: str) -> dict:
+        """Sync half of ``get_bars_with_coverage`` (runs in a worker thread)."""
+        session = get_database().get_session()
+        try:
+            concept = self._resolve_concept(session)
+            if concept is None:
+                # No live concept means we cannot even judge coverage; report
+                # the whole window missing rather than inventing an answer.
+                logger.warning(
+                    "fd-open-data: concept %s (%s/%s) not available; coverage unknown",
+                    self._concept_code, self._entity_type, self._frequency,
+                )
+                return {
+                    "closes": [],
+                    "missing": [{"start": start, "end": end}],
+                    "market_closed": [],
+                    "fill_failed": False,
+                    "fingerprint": "",
+                }
+            entity_id = self._resolve_entity_id(session, symbol)
+            if entity_id is None:
+                # An unknown symbol has no series at all: everything is missing.
+                return {
+                    "closes": [],
+                    "missing": [{"start": start, "end": end}],
+                    "market_closed": [],
+                    "fill_failed": False,
+                    "fingerprint": "",
+                }
+            from fd_open_data_mcp.fetch.gapfill import fill_gaps
+
+            out = fill_gaps(
+                session, concept.id, self._entity_type, entity_id, start, end
+            )
+            closes = [
+                (p["date"], Decimal(str(p["value"])))
+                for p in out.get("points", [])
+                if p.get("value") is not None
+            ]
+            return {
+                "closes": closes,
+                "missing": out.get("missing", []),
+                "market_closed": out.get("market_closed", []),
+                "fill_failed": out.get("fill_failed", False),
+                "fingerprint": out.get("fingerprint", ""),
+            }
+        finally:
+            session.close()
+
     async def get_latest_close(self, symbol: str) -> Decimal | None:
         """Most recent close within the lookback window; None on a data gap."""
         end = date.today()

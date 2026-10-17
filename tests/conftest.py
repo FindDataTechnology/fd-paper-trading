@@ -221,3 +221,145 @@ def sample_cancel_order_result_fixture():
 def error_response_fixture():
     """Sample error response for failed tool execution."""
     return {"error": "Insufficient funds to place order"}
+
+
+# ===== fd-quant compute plane (backtest-engine-v2, design D2) =====
+
+
+@pytest.fixture(scope="session")
+def compute_plane_server():
+    """Start the **real** fd-quant compute plane and point the client at it.
+
+    Why the real server rather than a stub: design D2 makes "same numbers as the
+    compute plane" a spec-level acceptance item, so the test must exercise the
+    actual cross-repo contract — a stub would pass while the contract was broken.
+    Starting it costs one process for the whole session; the server is a stateless
+    pure-compute service with no credentials, so there is nothing to isolate.
+
+    Skips (rather than fails) when the fd-quant checkout is absent, so this repo's
+    suite stays runnable on a machine that only has fd-paper-trading.
+    """
+    import os
+    import socket
+    import subprocess
+    import time
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    candidate = Path(os.environ.get("FD_QUANT_REPO", repo.parent / "fd-quant"))
+    if not (candidate / "fd_quant" / "compute" / "server.py").exists():
+        pytest.skip(f"fd-quant checkout not found at {candidate} (set FD_QUANT_REPO)")
+
+    python = candidate / ".venv" / "bin" / "python"
+    if not python.exists():
+        python = Path("python3")
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    proc = subprocess.Popen(
+        [str(python), "-m", "fd_quant.compute.server", "--http", str(port)],
+        cwd=str(candidate), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    url = f"http://127.0.0.1:{port}/mcp"
+    deadline = time.time() + 30
+    ready = False
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            out = proc.stdout.read() if proc.stdout else ""
+            raise RuntimeError(f"compute plane exited early:\n{out[-2000:]}")
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                ready = True
+                break
+        except OSError:
+            time.sleep(0.2)
+    if not ready:
+        proc.kill()
+        raise RuntimeError(f"compute plane did not open port {port} within 30s")
+
+    previous = os.environ.get("FD_QUANT_COMPUTE_ENDPOINT")
+    os.environ["FD_QUANT_COMPUTE_ENDPOINT"] = url
+    try:
+        yield url
+    finally:
+        if previous is None:
+            os.environ.pop("FD_QUANT_COMPUTE_ENDPOINT", None)
+        else:
+            os.environ["FD_QUANT_COMPUTE_ENDPOINT"] = previous
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _compute_plane_for_backtests(request):
+    """Session-scoped autouse wrapper: start the compute plane for every test.
+
+    Autouse rather than name-matched, because ``item.fixturenames.append`` in
+    ``pytest_collection_modifyitems`` runs after fixture resolution and therefore
+    never actually requests the fixture. Starting one extra local process for the
+    whole session is cheaper than a hook that silently does nothing.
+
+    Tests that do not touch the compute plane pay nothing but process start-up;
+    the server is idle otherwise.
+    """
+    from pathlib import Path
+    import os, socket, subprocess, time
+
+    repo = Path(__file__).resolve().parents[1]
+    candidate = Path(os.environ.get("FD_QUANT_REPO", repo.parent / "fd-quant"))
+    server = candidate / "fd_quant" / "compute" / "server.py"
+    if not server.exists():
+        # 不 skip：fd-paper-trading 的回测路径**依赖**计算面，静默跳过会让
+        # "跨仓口径一致"这条 spec 验收在 CI 里变成空跑。
+        pytest.fail(
+            f"fd-quant compute plane not found at {candidate} — the backtest path "
+            f"requires it (set FD_QUANT_REPO to the checkout)"
+        )
+
+    python = candidate / ".venv" / "bin" / "python"
+    if not python.exists():
+        python = Path("python3")
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    proc = subprocess.Popen(
+        [str(python), "-m", "fd_quant.compute.server", "--http", str(port)],
+        cwd=str(candidate), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    deadline = time.time() + 30
+    ready = False
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            out = proc.stdout.read() if proc.stdout else ""
+            raise RuntimeError(f"compute plane exited early:\n{out[-2000:]}")
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                ready = True
+                break
+        except OSError:
+            time.sleep(0.2)
+    if not ready:
+        proc.kill()
+        raise RuntimeError(f"compute plane did not open port {port} within 30s")
+
+    previous = os.environ.get("FD_QUANT_COMPUTE_ENDPOINT")
+    os.environ["FD_QUANT_COMPUTE_ENDPOINT"] = f"http://127.0.0.1:{port}/mcp"
+    try:
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        if previous is None:
+            os.environ.pop("FD_QUANT_COMPUTE_ENDPOINT", None)
+        else:
+            os.environ["FD_QUANT_COMPUTE_ENDPOINT"] = previous
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()

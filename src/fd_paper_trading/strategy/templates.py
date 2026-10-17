@@ -354,6 +354,66 @@ def list_templates() -> list[dict]:
     ]
 
 
+def weight_track_metadata() -> dict:
+    """Authoring metadata for the weight track, served with the catalog (task 2.2).
+
+    The catalog is how UIs and LLM tools learn what they may author without
+    hardcoding the shape; the weight track is not a template, so it cannot be a
+    catalog *entry* — it is the third ``kind`` and its surface is described here.
+    Values come from the models and group config rather than being restated, so a
+    limit changed in one place cannot leave a stale number in the catalog.
+    """
+    from .spec import _CONTRACT_MARKERS  # noqa: PLC0415 - avoids an import cycle
+    from ..persistence.models import DEFAULT_GROUP_CONFIG  # noqa: PLC0415
+
+    return {
+        "kind": "weight",
+        "description": (
+            "Multi-symbol target-weight strategies. State a universe and a "
+            "rebalance cadence, then supply weights either as Python "
+            "('target_weights(ctx)') or as a static series of dated mappings. "
+            "Weights are validated by the TargetWeights contract (non-negative, "
+            "sum <= 1, symbols within the universe) and are never normalized."
+        ),
+        "universe": {
+            "min_size": 1,
+            "max_size": DEFAULT_GROUP_CONFIG["max_universe_size"],
+            "max_size_config_key": "max_universe_size",
+            "note": (
+                "The effective limit is the user group's max_universe_size; this "
+                "is its default. A run whose universe exceeds it is refused."
+            ),
+        },
+        "rebalance": {
+            "field": "every_n_bars",
+            "type": "integer",
+            "minimum": 1,
+            "note": "Rebalance every N processed bars; other bars only snapshot.",
+        },
+        "sources": [
+            {
+                "form": "source",
+                "field": "source",
+                "description": "Python defining a top-level target_weights(ctx).",
+                "entry_point": "target_weights",
+                "sandboxed": True,
+            },
+            {
+                "form": "weights_series",
+                "field": "weights_series",
+                "description": (
+                    "Object of ISO date → {symbol: weight}. Each period is either "
+                    "a bare mapping or a full TargetWeights contract instance "
+                    "(whose cash_floor is honoured). A period holds until the next."
+                ),
+                "period_forms": ["mapping", "target_weights_instance"],
+                "contract_markers": list(_CONTRACT_MARKERS),
+            },
+        ],
+        "exactly_one_source": ["source", "weights_series"],
+    }
+
+
 def validate_template_params(template_id: str, params: dict) -> dict:
     """Validate params for a template; return clean params with defaults.
 

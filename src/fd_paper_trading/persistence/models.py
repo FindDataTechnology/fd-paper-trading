@@ -104,6 +104,10 @@ DEFAULT_GROUP_CONFIG = {
     "max_orders_per_day": 20,
     "allow_custom_code": False,
     "allowed_symbols": None,
+    # Weight-track runs trade a universe. 20 names keeps one full rotation inside
+    # the default daily order cap, so the cap constrains per-day churn rather than
+    # making a legal rebalance impossible on its own.
+    "max_universe_size": 20,
 }
 
 
@@ -334,6 +338,31 @@ class StrategyRun(Base):
     params: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     stats: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Weight-track runs only. ``universe`` is copied from the spec at run start so
+    #: editing the strategy afterwards cannot rewrite what a recorded run traded
+    #: (the same reason ``strategy_version`` is pinned). ``weight_snapshots`` holds
+    #: one entry per rebalance (target, actual, instructions with scaling flags);
+    #: ``data_gaps`` holds the (date, symbol) pairs valued from a stale close.
+    #: Null on single-symbol runs, which have no universe and no rebalance.
+    universe: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    weight_snapshots: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    data_gaps: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    #: Backtest v2 records (design D4/D5/D6). All nullable with no default: a run
+    #: that predates these capabilities keeps NULL, which is the honest shape of
+    #: "this run had no cost model / no benchmark / no windows" — and is what makes
+    #: the backward-compatibility regression meaningful instead of vacuous.
+    #: ``cost_config`` is snapshotted per run because "the same strategy scored
+    #: differently" is first explained by whether the cost parameters changed.
+    cost_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    cost_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    benchmark_config: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    benchmark_results: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    walkforward_windows: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    param_grid: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    scan_results: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    #: Machine-readable in-sample marker (design D7): the scan's best row is the
+    #: output most easily misread as a recommendation, so the disclaimer is data.
+    in_sample: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -403,3 +432,9 @@ class StrategyEventType:
     ORDER = "order"                # an order was placed (filled/rejected/...)
     REJECTION = "rejection"        # a signal was rejected (daily cap, etc.)
     ERROR = "error"                # a tick failed (logged, run continues)
+    # Weight-track runs (strategy-weight-mode). A REBALANCE marks a decision
+    # point of the run's cadence (with the counts it produced); a SKIP marks an
+    # instruction that was never sent to the service at all — a halted symbol,
+    # which is absent from the order stream rather than refused by it.
+    REBALANCE = "rebalance"        # a weight run reached a rebalance point
+    SKIP = "skip"                  # an instruction was skipped before placing

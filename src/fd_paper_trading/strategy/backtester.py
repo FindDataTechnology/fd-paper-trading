@@ -28,6 +28,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from ..marketdata.provider import Bar
+from .costs import CostModel, CostTotals, accumulate, apply_costs
 from .ctx import Signal, StrategyContext
 from .spec import CodeSpec, StrategySpec, TemplateSpec
 from .templates import make_evaluator
@@ -122,19 +123,38 @@ def _fill_price(signal: Signal, bar: Bar) -> Decimal | None:
     return signal.limit_price if bar.high >= signal.limit_price else None
 
 
-def _apply_signal(portfolio: _Portfolio, signal: Signal, bar: Bar) -> None:
+def _apply_signal(
+    portfolio: _Portfolio,
+    signal: Signal,
+    bar: Bar,
+    costs: CostModel | None = None,
+    totals: CostTotals | None = None,
+) -> None:
+    """Fill one signal against the bar, applying the cost model when enabled.
+
+    Affordability is checked against the **cost-inclusive** cash requirement:
+    a buy that fits at the raw price but not after slippage and commission must
+    be skipped, otherwise the simulated cash could go negative — a state the
+    live ledger cannot reach, which would make backtest and live incomparable.
+    """
     price = _fill_price(signal, bar)
     if price is None:
         return  # limit not crossed — expires at bar end
+    model = costs or CostModel()
+    fill = apply_costs(side=signal.side, quantity=signal.quantity, price=price, model=model)
     if signal.side == "BUY":
-        if signal.quantity * price > portfolio.cash:
+        if fill.notional + fill.commission > portfolio.cash:
             return  # unaffordable buy skipped
         signed = signal.quantity
     else:
         signed = -signal.quantity
     portfolio.trade_count += 1
-    portfolio.cash -= signed * price
-    portfolio.apply(signed, price)
+    portfolio.cash += fill.cash_delta
+    # The position is carried at the effective fill price: cost is realized in the
+    # average cost, so a later round trip measures PnL net of what was paid.
+    portfolio.apply(signed, fill.effective_price)
+    if totals is not None and model.enabled:
+        accumulate(totals, fill)
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +215,11 @@ def compute_stats(
 class BacktestResult:
     stats: dict
     equity_points: list[tuple[date, Decimal]]  # one per replayed bar
+    #: Cost configuration snapshot + per-run totals. ``None`` on the zero-cost
+    #: path so a run that never enabled costs records nothing new (the pre-v2
+    #: record shape is preserved exactly, not merely equivalently).
+    cost_config: dict | None = None
+    cost_summary: dict | None = None
 
 
 def _bar_date(bar: Bar) -> date:
@@ -202,14 +227,42 @@ def _bar_date(bar: Bar) -> date:
 
 
 async def replay(
-    bars: list[Bar], evaluator: BarEvaluator, initial_cash: Decimal
+    bars: list[Bar],
+    evaluator: BarEvaluator,
+    initial_cash: Decimal,
+    costs: CostModel | None = None,
+    measure_from: int = 0,
 ) -> BacktestResult:
-    """Replay bars through the evaluator; return stats + per-bar equity."""
+    """Replay bars through the evaluator; return stats + per-bar equity.
+
+    ``costs`` defaults to a disabled model, which makes every call site that
+    predates the cost model behave exactly as before (identity price, zero fees).
+
+    ``measure_from`` is the index at which **measurement** begins. Bars before it
+    are still replayed — the evaluator sees them and the portfolio trades them —
+    but no equity point is recorded for them and stats start from the equity at
+    that index. This exists for walk-forward, where the training window must be
+    fed as history or an indicator-based strategy starts every test segment cold
+    (a 30-bar SMA cannot fire inside a 40-bar window) and the whole exercise
+    reports zero trades. Carrying the portfolio state across the boundary is the
+    honest reading: the test segment starts with whatever the training segment
+    left behind, rather than an artificial liquidation.
+    """
     if not bars:
         raise EvaluationError("no bars to replay")
+    if not 0 <= measure_from < len(bars):
+        raise EvaluationError(
+            f"measure_from={measure_from} is outside the bar range 0..{len(bars) - 1}"
+        )
+    model = costs or CostModel()
+    totals = CostTotals()
     portfolio = _Portfolio(cash=initial_cash)
     curve: list[tuple[date, Decimal]] = []
     equity: list[Decimal] = []
+    #: Equity at the measurement boundary — the baseline the measured returns are
+    #: computed against, so a training period that gained 5% does not read as the
+    #: test period having gained 5%.
+    baseline: Decimal | None = None
     for i, bar in enumerate(bars):
         ctx = StrategyContext(
             bars[: i + 1], position=portfolio.position, cash=portfolio.cash
@@ -221,10 +274,22 @@ async def replay(
                 f"evaluation failed on bar {i} ({_bar_date(bar)}): {exc}"
             ) from exc
         for signal in ctx.signals:
-            _apply_signal(portfolio, signal, bar)
+            _apply_signal(portfolio, signal, bar, model, totals)
         eq = portfolio.equity(bar.close)
+        if i < measure_from:
+            continue
+        if baseline is None:
+            baseline = eq
         equity.append(eq)
         curve.append((_bar_date(bar), eq))
+    if not equity:
+        raise EvaluationError(
+            f"no measured bars: measure_from={measure_from} leaves an empty window"
+        )
     return BacktestResult(
-        stats=compute_stats(equity, initial_cash, portfolio), equity_points=curve
+        stats=compute_stats(equity, baseline if baseline is not None else initial_cash,
+                            portfolio),
+        equity_points=curve,
+        cost_config=model.to_dict() if model.enabled else None,
+        cost_summary=totals.to_dict() if model.enabled else None,
     )

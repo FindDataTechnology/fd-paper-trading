@@ -122,6 +122,130 @@ export default function BacktestPanel({ strategyId }: { strategyId: string }) {
               <Stat label="Win rate" value={pct(stats.win_rate)} />
               <Stat label="Trades" value={String(stats.trade_count ?? 0)} />
               <Stat label="Final equity" value={money(stats.final_equity)} />
+              {/* Extended stats come straight from the fd-quant compute plane via
+                  the API - the panel renders them, never recomputes them. */}
+              <Stat label="Annual return" value={pct(stats.annual_return)} />
+              <Stat label="Annual volatility" value={pct(stats.annual_volatility)} />
+              <Stat label="Sortino" value={money(stats.sortino)} />
+              <Stat label="Calmar" value={money(stats.calmar)} />
+              <Stat label="Turnover" value={pct(stats.turnover)} />
+            </div>
+          )}
+
+          {run.cost_config?.enabled && run.cost_summary && (
+            <div className="col" style={{ gap: 4 }}>
+              <span className="muted">Costs</span>
+              <div className="grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+                <Stat label="Commission" value={money(Number(run.cost_summary.commission))} />
+                <Stat label="Stamp tax" value={money(Number(run.cost_summary.stamp_tax))} />
+                <Stat label="Slippage" value={money(Number(run.cost_summary.slippage))} />
+              </div>
+              <span className="muted" style={{ fontSize: 12 }}>
+                commission {run.cost_config.commission_rate} · stamp tax{" "}
+                {run.cost_config.stamp_tax_rate} · slippage {run.cost_config.slippage_bps}bps
+              </span>
+            </div>
+          )}
+
+          {(run.benchmark_results ?? []).length > 0 && (
+            <div className="col" style={{ gap: 4 }}>
+              <span className="muted">Benchmarks</span>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Return</th>
+                    <th>Excess</th>
+                    <th>Tracking error</th>
+                    <th>Information ratio</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(run.benchmark_results ?? []).map((b: any) => (
+                    <tr key={b.symbol}>
+                      <td>{b.symbol}</td>
+                      {b.available ? (
+                        <>
+                          <td>{pct(b.stats?.total_return)}</td>
+                          <td>{pct(b.relative?.excess_return)}</td>
+                          <td>{pct(b.relative?.tracking_error)}</td>
+                          <td>{money(b.relative?.information_ratio)}</td>
+                        </>
+                      ) : (
+                        <td colSpan={4} className="muted">
+                          unavailable — {b.reason}
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {(run.walkforward_windows ?? []).length > 0 && (
+            <div className="col" style={{ gap: 4 }}>
+              <span className="muted">Walk-forward windows</span>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Train</th>
+                    <th>Test</th>
+                    <th>Return</th>
+                    <th>Trades</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(run.walkforward_windows ?? []).map((w: any) => (
+                    <tr key={w.window}>
+                      <td>{w.window}</td>
+                      <td>
+                        {w.train_start} → {w.train_end}
+                      </td>
+                      <td>
+                        {w.test_start} → {w.test_end}
+                      </td>
+                      <td>{pct(w.stats?.total_return)}</td>
+                      <td>{String(w.stats?.trade_count ?? 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {(run.scan_results ?? []).length > 0 && (
+            <div className="col" style={{ gap: 4 }}>
+              <span className="muted">Parameter scan</span>
+              {run.in_sample && (
+                <span className="muted" style={{ fontSize: 12 }}>
+                  In-sample result — these parameters were scored on the same
+                  window used to choose them; this is not a recommendation.
+                </span>
+              )}
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Params</th>
+                    <th>Return</th>
+                    <th>Sharpe</th>
+                    <th>Drawdown</th>
+                    <th>Trades</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(run.scan_results ?? []).map((row: any, i: number) => (
+                    <tr key={i}>
+                      <td>{JSON.stringify(row.params)}</td>
+                      <td>{pct(row.stats?.total_return)}</td>
+                      <td>{money(row.stats?.sharpe)}</td>
+                      <td>{pct(row.stats?.max_drawdown)}</td>
+                      <td>{String(row.stats?.trade_count ?? 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
 

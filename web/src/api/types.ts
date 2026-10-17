@@ -150,7 +150,26 @@ export interface CodeSpec {
   source: string;
 }
 
-export type StrategySpec = TemplateSpec | CodeSpec;
+/**
+ * Weight kind: a universe of symbols plus target weights, rebalanced every N
+ * bars. Exactly one of `source` (Python defining target_weights(ctx)) or
+ * `weights_series` (ISO date -> {symbol: weight}) is present.
+ *
+ * `weights_series` periods are typed loosely on purpose: the API also accepts a
+ * full TargetWeights contract instance per period (a pack's published output),
+ * which is not a `Record<string, number>`. The editor authors only the plain
+ * mapping form; a read-only view renders whatever came back.
+ */
+export interface WeightSpec {
+  kind: "weight";
+  universe: string[];
+  rebalance: { every_n_bars: number };
+  source?: string | null;
+  weights_series?: Record<string, Record<string, unknown>> | null;
+  cash_floors?: Record<string, number>;
+}
+
+export type StrategySpec = TemplateSpec | CodeSpec | WeightSpec;
 
 export interface StrategyOut {
   id: string;
@@ -168,6 +187,27 @@ export interface StrategyTemplateOut {
   name: string;
   description: string;
   params_schema: JsonSchema;
+}
+
+/**
+ * The full authoring surface (`GET /strategy-catalog`). `weight_track` is typed
+ * loosely because it describes a surface that grows; the fields the editor reads
+ * are the universe bounds and the rebalance field.
+ */
+export interface StrategyCatalogOut {
+  templates: StrategyTemplateOut[];
+  spec_kinds: string[];
+  weight_track: {
+    kind: string;
+    universe: {
+      min_size: number;
+      max_size: number;
+      max_size_config_key: string;
+    };
+    rebalance: { field: string; type: string; minimum: number };
+    sources: { form: string; field: string }[];
+    exactly_one_source: string[];
+  };
 }
 
 export interface StrategyCreate {
@@ -208,6 +248,56 @@ export const ACTIVE_RUN_STATUSES: StrategyRunStatus[] = [
   "RUNNING",
 ];
 
+/** Cost parameters actually used for a run (snapshot, not a live config). */
+export interface CostConfig {
+  enabled: boolean;
+  commission_rate: string;
+  stamp_tax_rate: string;
+  slippage_bps: string;
+}
+
+/** Aggregated fees for a run. Values are decimal strings, not numbers. */
+export interface CostSummary {
+  commission: string;
+  stamp_tax: string;
+  slippage: string;
+  total: string;
+  fills: number;
+}
+
+export interface BenchmarkRelative {
+  excess_return: number | null;
+  tracking_error: number | null;
+  information_ratio: number | null;
+  aligned_points: number;
+  reason?: string;
+}
+
+/** One benchmark's result. `available: false` carries the reason instead of a
+ * curve — the API never silently omits a requested benchmark. */
+export interface BenchmarkResult {
+  symbol: string;
+  available: boolean;
+  reason: string | null;
+  points: [string, string][] | null;
+  stats: Record<string, number | null> | null;
+  relative: BenchmarkRelative | null;
+}
+
+export interface WalkForwardWindow {
+  window: number;
+  train_start: string;
+  train_end: string;
+  test_start: string;
+  test_end: string;
+  stats: Record<string, number | null>;
+}
+
+export interface ScanRow {
+  params: Record<string, number>;
+  stats: Record<string, number | null>;
+}
+
 export interface StrategyRunOut {
   id: string;
   strategy_id: string;
@@ -218,6 +308,16 @@ export interface StrategyRunOut {
   params: Record<string, unknown> | null;
   stats: Record<string, number> | null;
   error: string | null;
+  // Backtest v2 records: null on runs that predate these capabilities, which is
+  // how the panel tells "not enabled" apart from "enabled, produced nothing".
+  cost_config: CostConfig | null;
+  cost_summary: CostSummary | null;
+  benchmark_config: string[] | null;
+  benchmark_results: BenchmarkResult[] | null;
+  walkforward_windows: WalkForwardWindow[] | null;
+  param_grid: Record<string, number[]> | null;
+  scan_results: ScanRow[] | null;
+  in_sample: boolean | null;
   started_at: string | null;
   stopped_at: string | null;
   created_at: string;

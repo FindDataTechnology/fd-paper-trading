@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   useStrategy,
+  useStrategyCatalog,
   useStrategyTemplates,
   useUpdateStrategy,
   useDeleteStrategy,
@@ -22,6 +23,7 @@ export default function StrategyDetailPage() {
   const { strategyId = "" } = useParams<{ strategyId: string }>();
   const { data: strategy, isLoading, error } = useStrategy(strategyId);
   const { data: templates } = useStrategyTemplates();
+  const { data: catalog } = useStrategyCatalog();
   const update = useUpdateStrategy(strategyId);
   const del = useDeleteStrategy();
   const navigate = useNavigate();
@@ -104,6 +106,7 @@ export default function StrategyDetailPage() {
         <StrategyEditor
           strategy={strategy}
           templates={templates ?? []}
+          universeLimit={catalog?.weight_track.universe.max_size ?? 20}
           name={name}
           description={description}
           spec={spec}

@@ -5,6 +5,7 @@ import type {
   StrategySpec,
   StrategyTemplateOut,
 } from "../api/types";
+import WeightEditor from "./WeightEditor";
 
 /**
  * Render a minimal set of inputs from a template's JSON Schema (params_schema).
@@ -50,6 +51,8 @@ export interface StrategyEditorProps {
   /** Existing strategy (edit mode) or null (create mode). */
   strategy?: StrategyOut | null;
   templates: StrategyTemplateOut[];
+  /** Group limit on the weight track's universe size (defaults to the API default). */
+  universeLimit?: number;
   /** Controlled current values. */
   name: string;
   description: string;
@@ -63,6 +66,7 @@ export interface StrategyEditorProps {
 export default function StrategyEditor({
   strategy,
   templates,
+  universeLimit = 20,
   name,
   description,
   spec,
@@ -71,6 +75,11 @@ export default function StrategyEditor({
   onSpec,
 }: StrategyEditorProps) {
   const kind = spec.kind;
+
+  // The weight track has no single symbol; the other two require one. Keeping the
+  // last known symbol lets a switch to template/code carry it over instead of
+  // blanking a field the author already filled in.
+  const currentSymbol = kind === "weight" ? "" : spec.symbol;
 
   // The template currently selected (for rendering its param form).
   const template = useMemo(
@@ -90,7 +99,7 @@ export default function StrategyEditor({
     for (const [key, prop] of Object.entries(props)) {
       params[key] = propDefault(prop);
     }
-    onSpec({ kind: "template", template: id, symbol: spec.symbol, params });
+    onSpec({ kind: "template", template: id, symbol: currentSymbol, params });
   }
 
   function setParam(key: string, raw: string) {
@@ -103,16 +112,27 @@ export default function StrategyEditor({
     });
   }
 
-  function setKind(next: "template" | "code") {
+  function setKind(next: "template" | "code" | "weight") {
     if (next === "template" && kind !== "template") {
       const first = templates[0];
       if (first) setTemplate(first.id);
-      else onSpec({ kind: "template", template: "", symbol: spec.symbol, params: {} });
+      else onSpec({ kind: "template", template: "", symbol: currentSymbol, params: {} });
     } else if (next === "code" && kind !== "code") {
       onSpec({
         kind: "code",
-        symbol: spec.symbol,
+        symbol: currentSymbol,
         source: strategy?.spec?.kind === "code" ? strategy.spec.source : "",
+      });
+    } else if (next === "weight" && kind !== "weight") {
+      // Switching to the weight track keeps nothing from a single-symbol spec
+      // except any source the author already wrote — the universe and cadence are
+      // new, and a symbol has no meaning here.
+      onSpec({
+        kind: "weight",
+        universe: [],
+        rebalance: { every_n_bars: 5 },
+        source: strategy?.spec?.kind === "code" ? strategy.spec.source : "",
+        weights_series: null,
       });
     }
   }
@@ -144,27 +164,30 @@ export default function StrategyEditor({
           Type
           <select
             value={kind}
-            onChange={(e) => setKind(e.target.value as "template" | "code")}
+            onChange={(e) => setKind(e.target.value as "template" | "code" | "weight")}
             aria-label="strategy type"
           >
             <option value="template">Template</option>
             <option value="code">Custom code</option>
+            <option value="weight">Weight portfolio</option>
           </select>
         </label>
 
-        <label className="col" style={{ gap: 4 }}>
-          <span className="muted">Symbol</span>
-          <input
-            value={spec.symbol}
-            onChange={(e) => onSpec({ ...spec, symbol: e.target.value.toUpperCase() })}
-            placeholder="AAPL"
-            aria-label="symbol"
-            style={{ width: 100 }}
-          />
-        </label>
+        {kind !== "weight" && (
+          <label className="col" style={{ gap: 4 }}>
+            <span className="muted">Symbol</span>
+            <input
+              value={spec.symbol}
+              onChange={(e) => onSpec({ ...spec, symbol: e.target.value.toUpperCase() })}
+              placeholder="AAPL"
+              aria-label="symbol"
+              style={{ width: 100 }}
+            />
+          </label>
+        )}
       </div>
 
-      {kind === "template" ? (
+      {kind === "template" && (
         <div className="col">
           <label className="col" style={{ gap: 4 }}>
             <span className="muted">Template</span>
@@ -223,13 +246,15 @@ export default function StrategyEditor({
             </div>
           )}
         </div>
-      ) : (
+      )}
+
+      {kind === "code" && (
         <div className="col">
           <span className="muted">Source (Python)</span>
           <textarea
-            value={spec.kind === "code" ? spec.source : ""}
+            value={spec.source}
             onChange={(e) =>
-              onSpec({ kind: "code", symbol: spec.symbol, source: e.target.value })
+              onSpec({ kind: "code", symbol: currentSymbol, source: e.target.value })
             }
             rows={14}
             spellCheck={false}
@@ -250,6 +275,10 @@ export default function StrategyEditor({
             only). Define a top-level <code>on_bar(ctx)</code>.
           </span>
         </div>
+      )}
+
+      {kind === "weight" && (
+        <WeightEditor spec={spec} onSpec={onSpec} universeLimit={universeLimit} />
       )}
     </div>
   );

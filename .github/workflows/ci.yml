@@ -18,6 +18,13 @@ jobs:
         run: uv python install 3.12
       - name: Sync dependencies
         run: uv sync
+      # CI has no fd-quant checkout beside this repo, so this verifies the pinned
+      # copy's integrity; upstream byte drift is checked wherever a checkout
+      # exists (the gate warns rather than failing when it has nothing to compare).
+      - name: Verify the vendored contract pin
+        run: uv run python scripts/check_contract_drift.py --check
+      - name: Prove the drift gate can fail
+        run: uv run python scripts/check_contract_drift.py --selfcheck
       - name: Run backend tests
         run: uv run pytest
 

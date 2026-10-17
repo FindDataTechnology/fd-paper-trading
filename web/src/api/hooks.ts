@@ -13,6 +13,7 @@ import type {
   StrategyOut,
   StrategyRunDetailOut,
   StrategyRunOut,
+  StrategyCatalogOut,
   StrategyTemplateOut,
   StrategyUpdate,
   BacktestRequest,
@@ -189,6 +190,14 @@ export function useStrategyTemplates() {
     queryKey: qk.templates,
     queryFn: () =>
       api.get<StrategyTemplateOut[]>("/strategy-templates").then((r) => r.data),
+  });
+}
+
+export function useStrategyCatalog() {
+  return useQuery({
+    queryKey: [...qk.templates, "catalog"],
+    queryFn: () =>
+      api.get<StrategyCatalogOut>("/strategy-catalog").then((r) => r.data),
   });
 }
 

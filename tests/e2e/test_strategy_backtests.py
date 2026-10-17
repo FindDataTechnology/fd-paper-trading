@@ -87,10 +87,16 @@ async def test_backtest_completes_with_stats_and_equity(client, auth_headers):
     done = await _wait_terminal(client, headers, run["id"])
     assert done["status"] == "COMPLETED"
     stats = done["stats"]
-    assert set(stats) == {
+    # The six original stats must all still be present and unchanged (spec
+    # "Request without new optional fields is unchanged"); the five extended
+    # stats come from the fd-quant compute plane and are additive.
+    assert {
         "total_return", "max_drawdown", "sharpe", "win_rate",
         "trade_count", "final_equity",
-    }
+    } <= set(stats)
+    assert {
+        "annual_return", "annual_volatility", "sortino", "calmar", "turnover",
+    } <= set(stats), f"extended stats missing from {sorted(stats)}"
     assert stats["trade_count"] >= 1  # dca every 2 bars over ~3 weeks
     points = done["equity_points"]
     assert len(points) >= 1
