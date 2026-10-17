@@ -20,7 +20,9 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from fd_open_data_mcp.db import get_database
+from fd_open_data_mcp.fetch.cache import read_cache_range
 from fd_open_data_mcp.fetch.dispatch import read_range
+from fd_open_data_mcp.fetch.gapfill import fingerprint as _fingerprint
 from fd_open_data_mcp.models import Concept, Entity
 
 from .provider import Bar, InstrumentSearchResult, MarketDataProvider, Quote
@@ -184,8 +186,40 @@ class FdOpenDataMarketDataProvider(MarketDataProvider):
                     "fill_failed": False,
                     "fingerprint": "",
                 }
-            from fd_open_data_mcp.fetch.gapfill import fill_gaps
+            from fd_open_data_mcp.fetch.gapfill import fill_gaps, is_fillable
+            from fd_open_data_mcp.fetch.gapfill import series_dates as _series_dates
+            from fd_open_data_mcp.fetch.coverage import coverage as _coverage
 
+            if not is_fillable(concept):
+                # Non-fillable concepts (nav.*, macro.*, …) are judged, not
+                # filled: fill_gaps deliberately refuses to fetch them, so its
+                # whole-window-missing answer there is a refusal notice, not a
+                # coverage verdict. Re-deriving nothing — the calendar still
+                # comes from the series' own cached dates, and the read is the
+                # same cache read fill_gaps would have done.
+                dates = _series_dates(
+                    session, concept.id, self._entity_type, entity_id
+                )
+                report = _coverage(dates, start, end)
+                rows = read_cache_range(
+                    session, concept.id, self._entity_type, entity_id, start, end
+                )
+                closes = [
+                    (r.date, Decimal(str(r.value)))
+                    for r in rows
+                    if r.value is not None
+                ]
+                return {
+                    "closes": closes,
+                    "missing": [
+                        {"start": g[0], "end": g[1]} for g in report.gaps
+                    ],
+                    "market_closed": [
+                        {"start": k[0], "end": k[1]} for k in report.known_empty
+                    ],
+                    "fill_failed": False,
+                    "fingerprint": _fingerprint(closes),
+                }
             out = fill_gaps(
                 session, concept.id, self._entity_type, entity_id, start, end
             )

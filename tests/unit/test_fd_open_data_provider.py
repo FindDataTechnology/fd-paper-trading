@@ -280,3 +280,84 @@ def test_single_concept_selected_when_multiple_match():
     # exactly one concept id is requested from read_range
     requested = mock_read.call_args[0][1]
     assert requested == [11]
+
+
+# ---- coverage gate: non-fillable concepts are judged, not filled ----
+
+
+def test_coverage_complete_for_nonfillable_concept(provider):
+    """Regression: a non-fillable concept (nav.*) with a dense series must read
+    as COMPLETE, not whole-window missing.
+
+    fill_gaps refuses to fetch non-price concepts (revised values must not be
+    pinned), and its early return there is a refusal notice — feeding it to the
+    coverage gate reported every nav.window as missing and rejected every NAV
+    backtest. The gate must judge coverage from the series' own dates instead.
+    """
+    concept = MagicMock(id=7, code="nav.unit")
+    entity = MagicMock(id=42)
+    session = _session_returning(concept, entity)
+    rows = [
+        MagicMock(date="2026-08-28", value=Decimal("4.6686")),
+        MagicMock(date="2026-08-29", value=Decimal("4.7")),
+    ]
+    with (
+        patch.object(mod, "get_database") as mock_db,
+        patch.object(mod, "read_cache_range", return_value=rows) as mock_rcr,
+        patch(
+            "fd_open_data_mcp.fetch.gapfill.series_dates",
+            return_value=["2026-08-28", "2026-08-29"],
+        ),
+    ):
+        mock_db.return_value.get_session.return_value = session
+        out = provider._coverage_sync("007355", "2026-08-28", "2026-08-29")
+    assert out["missing"] == []
+    assert len(out["closes"]) == 2
+    assert out["closes"][0] == ("2026-08-28", Decimal("4.6686"))
+    assert out["fill_failed"] is False
+    assert out["fingerprint"]
+    mock_rcr.assert_called_once()
+    session.close.assert_called_once()
+
+
+def test_coverage_reports_gap_for_nonfillable_concept(provider):
+    """A genuinely missing stretch in a non-fillable series still reports missing."""
+    concept = MagicMock(id=7, code="nav.unit")
+    entity = MagicMock(id=42)
+    session = _session_returning(concept, entity)
+    dates = ["2026-08-28", "2026-08-29", "2026-09-15", "2026-09-16"]
+    rows = [MagicMock(date=d, value=Decimal("1")) for d in dates]
+    with (
+        patch.object(mod, "get_database") as mock_db,
+        patch.object(mod, "read_cache_range", return_value=rows),
+        patch("fd_open_data_mcp.fetch.gapfill.series_dates", return_value=dates),
+    ):
+        mock_db.return_value.get_session.return_value = session
+        out = provider._coverage_sync("007355", "2026-08-28", "2026-09-16")
+    assert out["missing"] == [{"start": "2026-08-30", "end": "2026-09-14"}]
+
+
+def test_coverage_fillable_concept_still_goes_through_fill_gaps(provider):
+    """Price concepts keep the fill-then-report path (no behavior change)."""
+    concept = MagicMock(id=7, code="price.close")
+    entity = MagicMock(id=42)
+    session = _session_returning(concept, entity)
+    with (
+        patch.object(mod, "get_database") as mock_db,
+        patch(
+            "fd_open_data_mcp.fetch.gapfill.fill_gaps",
+            return_value={
+                "points": [{"date": "2026-08-28", "value": "10.0"}],
+                "missing": [],
+                "market_closed": [],
+                "fill_attempted": True,
+                "fill_failed": False,
+                "fingerprint": "abc",
+            },
+        ) as mock_fill,
+    ):
+        mock_db.return_value.get_session.return_value = session
+        out = provider._coverage_sync("AAPL", "2026-08-28", "2026-08-28")
+    mock_fill.assert_called_once()
+    assert out["closes"] == [("2026-08-28", Decimal("10.0"))]
+    assert out["fingerprint"] == "abc"
