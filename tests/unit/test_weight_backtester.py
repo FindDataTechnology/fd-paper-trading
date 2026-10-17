@@ -467,6 +467,11 @@ def test_walk_forward_weight_splits_and_stitches():
     # from the first window's ending equity).
     combined = result.equity_points
     assert combined and result.combined_stats.get("final_equity")
+    # Stitched curve holds TEST-segment points only and dates are strictly
+    # increasing — the compute plane's summarize_* rejects anything looser,
+    # which is exactly how the first live walk-forward failed.
+    cdates = [d.isoformat() for d, _ in combined]
+    assert all(b > a for a, b in zip(cdates, cdates[1:]))
     # Snapshots recorded after instructions (weight-track semantics preserved).
     assert all(
         isinstance(s.actual_weights, dict) for s in [w1, w2] if hasattr(w1, "actual_weights")

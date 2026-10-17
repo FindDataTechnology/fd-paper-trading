@@ -304,7 +304,14 @@ async def run_walk_forward_weight(
             window=i, train_start=trs, train_end=tre, test_start=ts, test_end=te,
             stats=result.stats, equity_points=result.equity_points,
         ))
-        combined.extend(result.equity_points)
+        # 拼接曲线只收【测试段】的点：重放段含训练热身（轴从窗段起点开始），
+        # 直接全并会让拼接曲线日期非严格递增（计算面 summarize_* 会拒绝），
+        # 而且训练段不是"按方案实际走下来"的经历。现金经 running_cash 连续，
+        # 测试段起点净值即窗段起点已实现的组合值。
+        test_points = [
+            (d, v) for d, v in result.equity_points if ts <= d.isoformat() <= te
+        ]
+        combined.extend(test_points)
         aggregated_gaps.extend(result.data_gaps)
         running_cash = result.equity_points[-1][1]
 
