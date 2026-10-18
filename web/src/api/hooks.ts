@@ -29,6 +29,7 @@ export const qk = {
   order: (id: string) => ["order", id] as const,
   search: (q: string) => ["instruments", q] as const,
   bars: (symbol: string, tf: string) => ["bars", symbol, tf] as const,
+  capabilities: ["market-capabilities"] as const,
   strategies: ["strategies"] as const,
   strategy: (id: string) => ["strategy", id] as const,
   templates: ["strategy-templates"] as const,
@@ -103,6 +104,19 @@ export function useBars(symbol: string | null, timeframe: string) {
         })
         .then((r) => r.data),
     enabled: !!symbol,
+  });
+}
+
+export function useMarketCapabilities() {
+  return useQuery({
+    queryKey: qk.capabilities,
+    queryFn: () =>
+      api
+        .get<{ timeframes: string[] }>("/instruments/capabilities")
+        .then((r) => r.data),
+    // Provider capability is fixed for the life of the process; refetching it
+    // every time a chart mounts buys nothing.
+    staleTime: Infinity,
   });
 }
 

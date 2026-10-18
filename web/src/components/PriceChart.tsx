@@ -7,12 +7,16 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { useBars } from "../api/hooks";
+import { useBars, useMarketCapabilities } from "../api/hooks";
 import { useQuote } from "../realtime/useRealtime";
 import { mid } from "../lib/format";
 import type { Bar } from "../api/types";
 
+// Offered only when the active provider serves them (see useMarketCapabilities):
+// a daily-only provider answers a minute-bar request with a 400, and a control
+// that can only produce errors is worse than no control.
 const TIMEFRAMES = ["1m", "5m", "15m", "1h", "1d"] as const;
+const FALLBACK_TIMEFRAME = "1d";
 
 interface LastBar {
   time: UTCTimestamp;
@@ -23,9 +27,14 @@ interface LastBar {
 }
 
 export default function PriceChart({ symbol, height = 380 }: { symbol: string; height?: number }) {
-  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("5m");
+  const { data: caps } = useMarketCapabilities();
+  const available = TIMEFRAMES.filter((tf) => !caps || caps.timeframes.includes(tf));
+  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>(FALLBACK_TIMEFRAME);
+  const effective = available.includes(timeframe)
+    ? timeframe
+    : ((available[available.length - 1] ?? FALLBACK_TIMEFRAME));
   const [chartType, setChartType] = useState<"candle" | "line">("candle");
-  const { data: bars, isFetching } = useBars(symbol, timeframe);
+  const { data: bars, isFetching } = useBars(symbol, effective);
   const quote = useQuote(symbol);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -163,8 +172,8 @@ export default function PriceChart({ symbol, height = 380 }: { symbol: string; h
             <option value="candle">Candlestick</option>
             <option value="line">Line</option>
           </select>
-          <select value={timeframe} onChange={(e) => setTimeframe(e.target.value as (typeof TIMEFRAMES)[number])}>
-            {TIMEFRAMES.map((tf) => (
+          <select value={effective} onChange={(e) => setTimeframe(e.target.value as (typeof TIMEFRAMES)[number])}>
+            {available.map((tf) => (
               <option key={tf} value={tf}>
                 {tf}
               </option>

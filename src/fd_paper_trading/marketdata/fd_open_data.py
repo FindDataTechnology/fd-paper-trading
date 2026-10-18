@@ -66,7 +66,15 @@ class FdOpenDataMarketDataProvider(MarketDataProvider):
     The concept family it reads — (concept code, entity type, frequency) — is
     configuration, defaulting to the live index-price family. A deprecated
     concept yields a data gap (empty series), never an error.
+
+    Daily only by construction: the ontology stores one point per trading day,
+    so there is no sub-daily series to serve and no synthesis that would not be
+    invented data. Declaring it here lets the bars endpoint answer 400 for a
+    minute-bar request instead of letting ``get_bars`` raise a bare ValueError
+    that surfaces as a 500.
     """
+
+    supported_timeframes: tuple[str, ...] = ("1d",)
 
     def __init__(
         self,

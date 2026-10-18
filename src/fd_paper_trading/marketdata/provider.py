@@ -80,6 +80,13 @@ class MarketDataProvider:
     ``get_bars`` support the web UI's symbol search and charting.
     """
 
+    #: Timeframes this provider can actually serve. Defaults to the full set
+    #: (the simulated provider really does synthesize all of them); a provider
+    #: fed by a daily-only source overrides this. The bars endpoint validates
+    #: against THIS set, so a timeframe the provider cannot serve is a 4xx
+    #: about the request rather than a 500 from inside the chart.
+    supported_timeframes: tuple[str, ...] = tuple(SUPPORTED_TIMEFRAMES)
+
     async def get_quote(self, symbol: str) -> Quote | None:
         raise NotImplementedError
 
