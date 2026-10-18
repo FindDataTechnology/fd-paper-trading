@@ -321,7 +321,12 @@ def test_coverage_complete_for_nonfillable_concept(provider):
 
 
 def test_coverage_reports_gap_for_nonfillable_concept(provider):
-    """A genuinely missing stretch in a non-fillable series still reports missing."""
+    """A genuinely missing stretch in a non-fillable series still reports missing.
+
+    The window is probed (see the holiday test below), but this stub answers
+    with real data for the gap — so it is a real hole and must stay ``missing``.
+    Probing must not turn "upstream has it" into "everything is fine".
+    """
     concept = MagicMock(id=7, code="nav.unit")
     entity = MagicMock(id=42)
     session = _session_returning(concept, entity)
@@ -331,10 +336,66 @@ def test_coverage_reports_gap_for_nonfillable_concept(provider):
         patch.object(mod, "get_database") as mock_db,
         patch.object(mod, "read_cache_range", return_value=rows),
         patch("fd_open_data_mcp.fetch.gapfill.series_dates", return_value=dates),
+        patch(
+            "fd_open_data_mcp.fetch.gapfill.probe_interval",
+            return_value=({"2026-09-01": 1.0}, "akshare"),
+        ) as mock_probe,
+        patch("fd_open_data_mcp.fetch.gapfill.record_empty_interval") as mock_record,
     ):
         mock_db.return_value.get_session.return_value = session
         out = provider._coverage_sync("007355", "2026-08-28", "2026-09-16")
     assert out["missing"] == [{"start": "2026-08-30", "end": "2026-09-14"}]
+    assert mock_probe.called, "the gap must be probed, not assumed"
+    mock_record.assert_not_called()  # upstream HAS data there -> not a closure
+
+
+def test_coverage_probes_and_records_a_holiday(provider):
+    """A gap upstream answers empty for is recorded as closed, not missing.
+
+    This is what makes a NAV backtest across a long holiday possible at all.
+    ``fill_gaps`` refuses non-fillable concepts, so without a probe here the
+    ``PriceEmptyInterval`` table stays empty for them and the coverage judgment
+    can never tell a holiday from a hole — every window spanning National Day
+    reads as missing and can never be repaired (there is no data to fetch).
+    """
+    concept = MagicMock(id=7, code="nav.unit")
+    entity = MagicMock(id=42)
+    session = _session_returning(concept, entity)
+    dates = ["2026-09-28", "2026-09-29", "2026-09-30",
+             "2026-10-08", "2026-10-09"]
+    rows = [MagicMock(date=d, value=Decimal("1")) for d in dates]
+    recorded: list[tuple] = []
+
+    def fake_record(_session, _cid, _et, _eid, start, end):
+        recorded.append((start, end))
+
+    def fake_known_empty(_session, _cid, _et, _eid):
+        return list(recorded)
+
+    with (
+        patch.object(mod, "get_database") as mock_db,
+        patch.object(mod, "read_cache_range", return_value=rows),
+        patch("fd_open_data_mcp.fetch.gapfill.series_dates", return_value=dates),
+        # A source answered, and it has nothing there: a market closure.
+        patch(
+            "fd_open_data_mcp.fetch.gapfill.probe_interval",
+            return_value=({}, "akshare"),
+        ),
+        patch(
+            "fd_open_data_mcp.fetch.gapfill.record_empty_interval", fake_record
+        ),
+        patch(
+            "fd_open_data_mcp.fetch.gapfill.known_empty_intervals", fake_known_empty
+        ),
+    ):
+        mock_db.return_value.get_session.return_value = session
+        out = provider._coverage_sync("510300", "2026-09-28", "2026-10-09")
+
+    assert recorded, "the answered-empty interval must be recorded"
+    assert out["missing"] == [], (
+        f"a proven holiday must not stay missing: {out['missing']}"
+    )
+    assert out["market_closed"], "and it must surface as market_closed"
 
 
 def test_coverage_fillable_concept_still_goes_through_fill_gaps(provider):

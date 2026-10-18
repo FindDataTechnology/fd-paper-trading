@@ -196,19 +196,55 @@ class FdOpenDataMarketDataProvider(MarketDataProvider):
                 }
             from fd_open_data_mcp.fetch.gapfill import fill_gaps, is_fillable
             from fd_open_data_mcp.fetch.gapfill import series_dates as _series_dates
+            from fd_open_data_mcp.fetch.gapfill import (
+                known_empty_intervals as _known_empty_intervals,
+                probe_interval as _probe_interval,
+                record_empty_interval as _record_empty_interval,
+            )
             from fd_open_data_mcp.fetch.coverage import coverage as _coverage
 
             if not is_fillable(concept):
                 # Non-fillable concepts (nav.*, macro.*, …) are judged, not
                 # filled: fill_gaps deliberately refuses to fetch them, so its
                 # whole-window-missing answer there is a refusal notice, not a
-                # coverage verdict. Re-deriving nothing — the calendar still
-                # comes from the series' own cached dates, and the read is the
-                # same cache read fill_gaps would have done.
+                # coverage verdict.
+                #
+                # But "not filled" must not mean "not probed". Without a probe
+                # the coverage judgment has no way to tell a market holiday from
+                # a hole, so every window spanning a long holiday reads as
+                # missing — and it can never be repaired, because there is
+                # genuinely no data there. This branch therefore asks upstream
+                # once per gap and records the ones it proves empty; those come
+                # back as market_closed, and the rest stay missing (proving
+                # nothing means staying unproven, not becoming "complete").
                 dates = _series_dates(
                     session, concept.id, self._entity_type, entity_id
                 )
                 report = _coverage(dates, start, end)
+                for gap_start, gap_end in report.fetchable:
+                    try:
+                        series, used_source = _probe_interval(
+                            session, concept, self._entity_type, entity_id,
+                            gap_start, gap_end,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - one bad interval must not kill the rest
+                        logger.warning(
+                            "fd-open-data: probe failed for [%s..%s]: %s",
+                            gap_start, gap_end, exc,
+                        )
+                        continue
+                    if not series and used_source:
+                        _record_empty_interval(
+                            session, concept.id, self._entity_type, entity_id,
+                            gap_start, gap_end,
+                        )
+                if report.gaps:
+                    report = _coverage(
+                        dates, start, end,
+                        known_empty=_known_empty_intervals(
+                            session, concept.id, self._entity_type, entity_id
+                        ),
+                    )
                 rows = read_cache_range(
                     session, concept.id, self._entity_type, entity_id, start, end
                 )
@@ -219,8 +255,14 @@ class FdOpenDataMarketDataProvider(MarketDataProvider):
                 ]
                 return {
                     "closes": closes,
+                    # ``gaps`` keeps known-empty intervals in it by design (it
+                    # reports the union); the split into missing vs closed is
+                    # the caller's job. Reporting the raw list would put the
+                    # holiday back into missing and undo the whole point.
                     "missing": [
-                        {"start": g[0], "end": g[1]} for g in report.gaps
+                        {"start": g[0], "end": g[1]}
+                        for g in report.gaps
+                        if g not in set(report.known_empty)
                     ],
                     "market_closed": [
                         {"start": k[0], "end": k[1]} for k in report.known_empty
