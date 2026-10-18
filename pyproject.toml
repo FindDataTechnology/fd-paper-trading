@@ -27,7 +27,13 @@ dependencies = [
     "fastmcp>=2.5.3",
     # Library import of the open-data ontology (read_range bulk series API is
     # required by the fd-open-data market-data provider).
-    "fd-open-data-mcp>=0.4.4",
+    #
+    # The [data] extra is NOT optional here: the coverage judgment probes
+    # upstream to tell a market closure from a data hole, and a probe with no
+    # fetcher installed fails as "could not ask" — which correctly stays
+    # missing, so every window spanning a holiday is rejected forever. The
+    # provider needs at least one real source to answer.
+    "fd-open-data-mcp[data]>=0.5.40",
 ]
 
 [project.scripts]
