@@ -3,7 +3,9 @@
   "server": "fd-paper-trading",
   "entry_path": "/fd-paper-trading",
   "product_line": "wire",
-  "hosting": ["shared-instance"],
+  "hosting": [
+    "shared-instance"
+  ],
   "description": "柏讯模拟交易（paper trading）MCP：多租户账户/订单/持仓/行情 + 策略双轨（模板与沙箱自定义代码）+ 回测与纸面实盘。调用者身份逐请求委托（进站 Authorization 转发），共享实例上每个调用者操作自己的账户。paper-only：无真实订单、无真实资金。",
   "skills_eligible_for_packs": [
     "paper-trading-conversation",
@@ -45,7 +47,7 @@
       "readOnlyHint": false,
       "destructiveHint": false,
       "idempotentHint": false,
-      "openWorldHint": false
+      "openWorldHint": true
     },
     "list_positions": {
       "readOnlyHint": true,
@@ -75,13 +77,13 @@
       "readOnlyHint": false,
       "destructiveHint": false,
       "idempotentHint": false,
-      "openWorldHint": false
+      "openWorldHint": true
     },
     "update_strategy": {
       "readOnlyHint": false,
       "destructiveHint": true,
       "idempotentHint": true,
-      "openWorldHint": false
+      "openWorldHint": true
     },
     "list_strategies": {
       "readOnlyHint": true,

@@ -46,8 +46,12 @@ WRITES_STATE = {
 #: Writes that may delete or irreversibly overwrite caller-owned content.
 DESTRUCTIVE = {"update_strategy"}
 
-#: Tools whose result depends on a mutable external entity set (live market
-#: data or mutable account/order/run state).
+#: Tools whose result is about a mutable, non-enumerable entity set (live
+#: market data, or mutable account/order/strategy/run state). Note this is
+#: orthogonal to read-vs-write: ``create_account`` and ``create_strategy`` are
+#: open-world for the same reason ``list_accounts`` and ``list_strategies`` are
+#: — same entity set. Only ``list_strategy_templates`` answers from built-in
+#: constants, so it is the sole closed tool.
 OPEN_WORLD = {
     "place_order",
     "cancel_order",
@@ -64,6 +68,9 @@ OPEN_WORLD = {
     "list_strategy_runs",
     "start_strategy",
     "stop_strategy",
+    "create_account",
+    "create_strategy",
+    "update_strategy",
 }
 
 

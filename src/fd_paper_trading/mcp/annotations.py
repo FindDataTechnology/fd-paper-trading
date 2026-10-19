@@ -26,8 +26,15 @@ Judgment calls worth spelling out:
   counter increments, but there is no spec history).
 - Read tools that reflect mutable service/market state (accounts, orders,
   positions, runs) are open-world; ``list_strategy_templates`` reads built-in
-  static templates, so it is closed. Writes that create a resource from closed
-  service config (``create_account``, ``create_strategy``) are closed too.
+  static templates, so it is closed.
+- ``openWorldHint`` follows the **entity set the tool's result is about**, not
+  whether the tool writes. ``create_account`` answers with an account drawn from
+  the same mutable, non-enumerable account set that ``list_accounts`` reads, so
+  both are open-world — marking one closed and the other open would contradict
+  itself within one service. Same for ``create_strategy`` / ``list_strategies``.
+  A write is closed only when its answer depends solely on built-in constants,
+  which here means no tool at all: ``list_strategy_templates`` is the only
+  closed tool in this service, and it is a pure read.
 """
 from __future__ import annotations
 
@@ -63,23 +70,16 @@ WRITE_NEW_OPEN: dict[str, Any] = {
     "openWorldHint": True,
 }
 
-#: An append-only write whose new resource depends only on closed service
-#: config (a fresh account, a strategy validated against built-in templates).
-WRITE_NEW_CLOSED: dict[str, Any] = {
-    "readOnlyHint": False,
-    "destructiveHint": False,
-    "idempotentHint": False,
-    "openWorldHint": False,
-}
-
 #: An in-place overwrite of caller-owned content. The previous content is not
 #: retained, so it is destructive. Repeating the same PATCH converges on the
 #: same row (a normalized spec does not bump the version twice) -> idempotent.
-WRITE_OVERWRITE_CLOSED: dict[str, Any] = {
+#: Open-world: the strategy it overwrites lives in the same mutable strategy
+#: set that ``list_strategies`` reports, so the tool's result is about that set.
+WRITE_OVERWRITE_OPEN: dict[str, Any] = {
     "readOnlyHint": False,
     "destructiveHint": True,
     "idempotentHint": True,
-    "openWorldHint": False,
+    "openWorldHint": True,
 }
 
 #: A status transition on mutable trading state. ``cancel_order`` answers
@@ -110,7 +110,8 @@ TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "list_orders": dict(READ_ONLY_OPEN),
     "list_accounts": dict(READ_ONLY_OPEN),
     "get_account": dict(READ_ONLY_OPEN),
-    "create_account": dict(WRITE_NEW_CLOSED),
+    # Open like list_accounts: the answer is an account from the same mutable set.
+    "create_account": dict(WRITE_NEW_OPEN),
     "list_positions": dict(READ_ONLY_OPEN),
     # ---- market ----
     # The instrument universe comes from an external ontology that changes over
@@ -119,8 +120,9 @@ TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "get_bars": dict(READ_ONLY_OPEN),
     # ---- strategy ----
     "list_strategy_templates": dict(READ_ONLY_CLOSED),
-    "create_strategy": dict(WRITE_NEW_CLOSED),
-    "update_strategy": dict(WRITE_OVERWRITE_CLOSED),
+    # Open like list_strategies: same mutable strategy set.
+    "create_strategy": dict(WRITE_NEW_OPEN),
+    "update_strategy": dict(WRITE_OVERWRITE_OPEN),
     "list_strategies": dict(READ_ONLY_OPEN),
     "get_strategy": dict(READ_ONLY_OPEN),
     "run_backtest": dict(WRITE_NEW_OPEN),
