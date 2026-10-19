@@ -5,7 +5,9 @@ Direction 1 (registry drift): every @mcp.tool in fd_paper_trading.mcp.server
 must be declared in tool-surface.json, and every declared tool must be
 registered. Direction 2 (closure): any tool a consumer may expose must fall
 within the manifest's commercial set — for this server every group is
-commercial, so the closure assertion pins the full inventory.
+commercial, so the closure assertion pins the full inventory. Direction 3
+(annotations): the manifest's four behavior flags per tool must equal the
+flags the runtime server actually registered, in both directions.
 
 Run: uv run python scripts/selfcheck_surface.py
 """
@@ -21,9 +23,12 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tool-surface.json"
 SERVER_SRC = ROOT / "src" / "fd_paper_trading" / "mcp" / "server.py"
 
+#: The behavior hints every tool must declare, in manifest order.
+REQUIRED_HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
 
-def registered_tools() -> set[str]:
-    """Tool names registered on the FastMCP instance, derived from source.
+
+def runtime_tools() -> list:
+    """Tools registered on the FastMCP instance, asked of the live registry.
 
     The server module requires no credentials at import time (fallback token
     is optional), so importing it directly is safe and keeps this check honest
@@ -33,8 +38,60 @@ def registered_tools() -> set[str]:
 
     import fd_paper_trading.mcp.server as server_mod  # noqa: E402
 
-    tools = asyncio.run(server_mod.mcp._list_tools())
-    return {t.name for t in tools}
+    return asyncio.run(server_mod.mcp._list_tools())
+
+
+def registered_tools() -> set[str]:
+    return {t.name for t in runtime_tools()}
+
+
+def runtime_annotations() -> dict[str, dict]:
+    """Each tool's declared flags as the runtime registry holds them.
+
+    A tool with no annotations maps to ``{}`` so the caller can report it as a
+    missing declaration rather than silently skipping it.
+    """
+    out: dict[str, dict] = {}
+    for t in runtime_tools():
+        a = t.annotations
+        out[t.name] = (
+            {} if a is None else {k: getattr(a, k) for k in REQUIRED_HINTS}
+        )
+    return out
+
+
+def check_annotations(manifest: dict, declared: set[str]) -> list[str]:
+    """Manifest flags must equal runtime flags, in both directions.
+
+    Missing flags and a manifest that disagrees with the implementation both
+    fail: the second is the dangerous one — a client auto-approves a tool the
+    manifest calls read-only while the server writes state.
+    """
+    problems: list[str] = []
+    table = manifest.get("tool_annotations")
+    if not isinstance(table, dict):
+        return ["tool_annotations missing from manifest (flags must ship with tools)"]
+
+    for name in sorted(declared - set(table)):
+        problems.append(f"{name}: manifest declares no behavior annotations")
+    for name in sorted(set(table) - declared):
+        problems.append(f"{name}: tool_annotations names a tool that is not registered")
+
+    live = runtime_annotations()
+    for name in sorted(declared & set(table)):
+        entry = table[name]
+        missing = [k for k in REQUIRED_HINTS if k not in entry]
+        if missing:
+            problems.append(f"{name}: manifest flags incomplete, missing {missing}")
+            continue
+        actual = live.get(name, {})
+        for key in REQUIRED_HINTS:
+            if actual.get(key) != entry[key]:
+                problems.append(
+                    f"{name}.{key}: manifest declares {entry[key]!r} but runtime "
+                    f"registered {actual.get(key)!r}"
+                )
+    return problems
 
 
 def main() -> int:
@@ -72,11 +129,14 @@ def main() -> int:
             + ", ".join(sorted(declared - commercial))
         )
 
+    problems += check_annotations(manifest, declared)
+
     if problems:
         for p in problems:
             print(f"FAIL: {p}")
         return 1
     print(f"OK: manifest == registry ({len(live)} tools), commercial closure holds")
+    print(f"OK: annotations match runtime for {len(live)} tools ({len(REQUIRED_HINTS)} flags each)")
     return 0
 
 

@@ -14,6 +14,8 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
 
+from .annotations import annotations_for
+
 PAPER_TRADING_API_URL = os.getenv("PAPER_TRADING_API_URL", "http://localhost:8000")
 # Fallback for headerless transports (stdio). HTTP callers must present their
 # own credential; it is never substituted by this shared token.
@@ -123,7 +125,7 @@ def _api_call(
         return False, {"error": True, "code": "connection_error", "message": str(e)}
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("place_order"))
 def place_order(
     account_id: str,
     symbol: str,
@@ -162,7 +164,7 @@ def place_order(
     return data
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("cancel_order"))
 def cancel_order(order_id: str) -> dict:
     """Cancel a pending or partially-filled order.
 
@@ -179,7 +181,7 @@ def cancel_order(order_id: str) -> dict:
     return data
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("list_orders"))
 def list_orders(account_id: str, status: str | None = None) -> list[dict]:
     """List orders for an account, optionally filtered by status.
 
@@ -197,7 +199,7 @@ def list_orders(account_id: str, status: str | None = None) -> list[dict]:
     return []
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("list_accounts"))
 def list_accounts() -> list[dict]:
     """List all accounts for the authenticated user.
 
@@ -211,7 +213,7 @@ def list_accounts() -> list[dict]:
     return []
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("get_account"))
 def get_account(account_id: str) -> dict:
     """Get detailed information about a specific account.
 
@@ -228,7 +230,7 @@ def get_account(account_id: str) -> dict:
     return data
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("create_account"))
 def create_account(name: str, starting_balance: Decimal | None = None) -> dict:
     """Open a new paper account for the authenticated user.
 
@@ -254,7 +256,7 @@ def create_account(name: str, starting_balance: Decimal | None = None) -> dict:
     return data
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("list_positions"))
 def list_positions(account_id: str) -> list[dict]:
     """List open positions for an account with quantity, average cost, and P&L.
 
@@ -271,7 +273,7 @@ def list_positions(account_id: str) -> list[dict]:
     return []
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("search_instruments"))
 def search_instruments(query: str) -> list[dict]:
     """Search the tradable instrument universe by symbol or company name.
 
@@ -290,7 +292,7 @@ def search_instruments(query: str) -> list[dict]:
     return []
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("get_bars"))
 def get_bars(symbol: str, timeframe: str = "1d", limit: int = 200) -> list[dict]:
     """Get historical OHLCV bars for a symbol, oldest-first.
 
@@ -318,7 +320,7 @@ def get_bars(symbol: str, timeframe: str = "1d", limit: int = 200) -> list[dict]
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("list_strategy_templates"))
 def list_strategy_templates() -> list[dict]:
     """List the built-in strategy templates with their parameter JSON Schemas.
 
@@ -334,7 +336,7 @@ def list_strategy_templates() -> list[dict]:
     return []
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("create_strategy"))
 def create_strategy(name: str, spec: dict, description: str | None = None) -> dict:
     """Create a strategy from a spec.
 
@@ -362,7 +364,7 @@ def create_strategy(name: str, spec: dict, description: str | None = None) -> di
     return data
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("update_strategy"))
 def update_strategy(
     strategy_id: str,
     name: str | None = None,
@@ -394,7 +396,7 @@ def update_strategy(
     return data
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("list_strategies"))
 def list_strategies() -> list[dict]:
     """List all strategies for the authenticated user.
 
@@ -408,7 +410,7 @@ def list_strategies() -> list[dict]:
     return []
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("get_strategy"))
 def get_strategy(strategy_id: str) -> dict:
     """Get one strategy by id.
 
@@ -422,7 +424,7 @@ def get_strategy(strategy_id: str) -> dict:
     return data
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("run_backtest"))
 def run_backtest(
     strategy_id: str,
     start: str,
@@ -452,7 +454,7 @@ def run_backtest(
     return data
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("get_strategy_run"))
 def get_strategy_run(run_id: str) -> dict:
     """Get a strategy run's status, stats, and equity curve.
 
@@ -468,7 +470,7 @@ def get_strategy_run(run_id: str) -> dict:
     return data
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("list_strategy_runs"))
 def list_strategy_runs(
     strategy_id: str | None = None,
     mode: str | None = None,
@@ -493,7 +495,7 @@ def list_strategy_runs(
     return []
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("start_strategy"))
 def start_strategy(strategy_id: str, account_id: str) -> dict:
     """Start a live paper run of a strategy against a paper account.
 
@@ -515,7 +517,7 @@ def start_strategy(strategy_id: str, account_id: str) -> dict:
     return data
 
 
-@mcp.tool
+@mcp.tool(annotations=annotations_for("stop_strategy"))
 def stop_strategy(run_id: str) -> dict:
     """Stop a live paper run. Cancels the run's resting LIMIT orders but never
     closes its positions.
