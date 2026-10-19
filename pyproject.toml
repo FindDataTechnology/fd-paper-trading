@@ -24,7 +24,7 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "requests>=2.31",
-    "fastmcp>=2.5.3",
+    "fastmcp>=3.4,<4",
     # Library import of the open-data ontology (read_range bulk series API is
     # required by the fd-open-data market-data provider).
     #
