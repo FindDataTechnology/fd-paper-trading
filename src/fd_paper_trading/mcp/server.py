@@ -48,6 +48,32 @@ def _resolve_credential() -> str | None:
     return _inbound_bearer() or PAPER_TRADING_API_TOKEN
 
 
+def _unavailable_message(data: dict) -> str:
+    """失败时的错误文本，**保留 API 给的结构化码**。
+
+    **为什么不返回空列表**：`[]` 的意思是"你确实没有订单"。上游 500 或网络
+    断开时返回 `[]`，调用方会据此以为"这个账户是空的"——而真相是"我们不知道"。
+    这两件事在交易场景里的后果完全不同（前者可能触发补单，后者必须停手）。
+
+    **不把一切都叫 upstream_unavailable**：API 的 `not_found`（账户不存在 /
+    不属于这个调用者）是**调用方的问题**，重试无用；把它归到 upstream 会让
+    调用方反复重试一个永远不会成功的目标。故原样带出 API 的 code，并在前面
+    加上 mcp-error-semantics 的分类前缀。
+    """
+    code = (data or {}).get("code") or "api_error"
+    message = (data or {}).get("message") or "upstream returned no usable payload"
+    # 语义分类（mcp-error-semantics 的四类）：
+    # - not_found：查询有效但无此对象。跨租户访问也走这条（与"不存在"同形，
+    #   不泄露存在性），调用方应停手而不是重试。
+    # - invalid_input：参数本身不合法。
+    # - 其余：上游/连接故障，可重试。
+    if code == "not_found":
+        return f"not_found: {code}: {message}"
+    if code in ("validation_error", "invalid_method", "invalid_input"):
+        return f"invalid_input: {code}: {message}"
+    return f"upstream_unavailable: {code}: {message}"
+
+
 def _api_call(
     method: str,
     endpoint: str,
@@ -190,13 +216,15 @@ def list_orders(account_id: str, status: str | None = None) -> list[dict]:
         status: Optional filter (PENDING, FILLED, CANCELLED, etc.)
 
     Returns:
-        List of orders with fills included. Empty list on error.
+        List of orders with fills included. A failure raises a tool error
+        rather than an empty list — "you have no orders" and "the API is
+        unreachable" are different answers.
     """
     params = {"status": status} if status else None
     success, data = _api_call("GET", f"/api/v1/accounts/{account_id}/orders", params=params)
     if success:
         return data
-    return []
+    raise ToolError(_unavailable_message(data))
 
 
 @mcp.tool(annotations=annotations_for("list_accounts"))
@@ -205,12 +233,13 @@ def list_accounts() -> list[dict]:
 
     Returns:
         List of accounts with IDs, names, and current cash balances.
-        Empty list on error.
+        A failure raises a tool error rather than an empty list — "you have no
+        accounts" and "the API is unreachable" are different answers.
     """
     success, data = _api_call("GET", "/api/v1/accounts")
     if success:
         return data
-    return []
+    raise ToolError(_unavailable_message(data))
 
 
 @mcp.tool(annotations=annotations_for("get_account"))
@@ -265,12 +294,15 @@ def list_positions(account_id: str) -> list[dict]:
 
     Returns:
         List of positions (symbol, quantity, average price, realized and
-        unrealized P&L). Empty list on error.
+        unrealized P&L). A failure raises a tool error (upstream_unavailable /
+        not_found) rather than an empty list — an empty list means "this
+        account has no positions", which must not be confused with "we could
+        not reach the API".
     """
     success, data = _api_call("GET", f"/api/v1/accounts/{account_id}/positions")
     if success:
         return data
-    return []
+    raise ToolError(_unavailable_message(data))
 
 
 @mcp.tool(annotations=annotations_for("search_instruments"))
@@ -282,14 +314,14 @@ def search_instruments(query: str) -> list[dict]:
 
     Returns:
         Matching instruments with symbol, name, and venue. Empty list when
-        nothing matches.
+        nothing matches (a real empty result); a failure raises a tool error.
     """
     success, data = _api_call(
         "GET", "/api/v1/instruments/search", params={"q": query}
     )
     if success:
         return data
-    return []
+    raise ToolError(_unavailable_message(data))
 
 
 @mcp.tool(annotations=annotations_for("get_bars"))
@@ -312,7 +344,7 @@ def get_bars(symbol: str, timeframe: str = "1d", limit: int = 200) -> list[dict]
     )
     if success:
         return data
-    return []
+    raise ToolError(_unavailable_message(data))
 
 
 # ---------------------------------------------------------------------------
@@ -328,12 +360,13 @@ def list_strategy_templates() -> list[dict]:
     {"kind": "template", "template": <id>, "symbol": "AAPL", "params": {...}}.
 
     Returns:
-        List of {id, name, description, params_schema}. Empty list on error.
+        List of {id, name, description, params_schema}. A failure raises a
+        tool error rather than an empty list.
     """
     success, data = _api_call("GET", "/api/v1/strategy-templates")
     if success:
         return data
-    return []
+    raise ToolError(_unavailable_message(data))
 
 
 @mcp.tool(annotations=annotations_for("create_strategy"))
@@ -402,12 +435,12 @@ def list_strategies() -> list[dict]:
 
     Returns:
         List of strategies with id, name, spec, spec_summary, and version.
-        Empty list on error.
+        A failure raises a tool error rather than an empty list.
     """
     success, data = _api_call("GET", "/api/v1/strategies")
     if success:
         return data
-    return []
+    raise ToolError(_unavailable_message(data))
 
 
 @mcp.tool(annotations=annotations_for("get_strategy"))
@@ -484,7 +517,8 @@ def list_strategy_runs(
         status: QUEUED, RUNNING, COMPLETED, FAILED, STARTING, STOPPED, ERROR
 
     Returns:
-        List of runs, newest first. Empty list on error.
+        List of runs, newest first. A failure raises a tool error rather
+        than an empty list.
     """
     params = {k: v for k, v in {
         "strategy_id": strategy_id, "mode": mode, "status": status
@@ -492,7 +526,7 @@ def list_strategy_runs(
     success, data = _api_call("GET", "/api/v1/strategy-runs", params=params or None)
     if success:
         return data
-    return []
+    raise ToolError(_unavailable_message(data))
 
 
 @mcp.tool(annotations=annotations_for("start_strategy"))

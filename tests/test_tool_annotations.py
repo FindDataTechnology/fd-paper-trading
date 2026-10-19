@@ -162,3 +162,43 @@ def test_annotations_are_copies_not_shared():
 def test_unknown_tool_raises_instead_of_defaulting():
     with pytest.raises(KeyError):
         annotations_for("no_such_tool")
+
+
+# ── 不可静默降级为成功（mcp-error-semantics）───────────────────
+
+def test_list_tools_never_return_an_empty_list_on_upstream_failure():
+    """上游故障必须抛错，不能返回空列表。
+
+    `[]` 的意思是"你确实没有订单/账户/持仓"。上游 500 或网络断开时返回
+    `[]`，调用方会据此以为"这个账户是空的"——在交易场景里，这个误读可能
+    触发补单或误判空仓。
+
+    静态断言：这些 list 形状的工具源码里不得出现 `return []` 作为失败分支。
+    """
+    import inspect
+
+    from fd_paper_trading.mcp import server as srv
+
+    list_tools = [
+        "list_orders", "list_accounts", "list_positions", "search_instruments",
+        "list_strategy_templates", "list_strategies", "list_strategy_runs",
+    ]
+    for name in list_tools:
+        src = inspect.getsource(getattr(srv, name))
+        assert "return []" not in src, (
+            f"{name} 在失败分支返回空列表——那是静默降级，应为 ToolError"
+        )
+
+
+def test_upstream_failure_message_keeps_the_api_code():
+    """错误文本保留 API 的结构化码，并按四类前缀分类。"""
+    from fd_paper_trading.mcp.server import _unavailable_message
+
+    assert _unavailable_message({"code": "not_found", "message": "Account not found"}).startswith(
+        "not_found:")
+    assert _unavailable_message({"code": "validation_error", "message": "bad spec"}).startswith(
+        "invalid_input:")
+    assert _unavailable_message({"code": "api_error", "message": "boom"}).startswith(
+        "upstream_unavailable:")
+    # 没有任何结构化载荷时也要给出一条可读原因，而不是空字符串
+    assert "api_error" in _unavailable_message({})

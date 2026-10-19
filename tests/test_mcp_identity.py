@@ -172,10 +172,14 @@ def test_two_users_are_isolated(live_server, two_users):
     )
     assert r.status_code == 404, r.text
 
-    bob_positions = _tool_call(
-        live_server, bob_token, mcp_server.list_positions, alice_account
-    )
-    assert bob_positions == []
+    # Bob reading Alice's positions must not read as "this account is empty" —
+    # that is indistinguishable from a real empty portfolio, and an agent could
+    # act on it. The tool now surfaces the API's not_found as an error
+    # (mcp-error-semantics: 未找到是一个码，不是空结果). The isolation property
+    # is unchanged: Bob still learns nothing about Alice's account, because
+    # "not found" is the same answer a nonexistent id gets.
+    with pytest.raises(ToolError, match="not_found"):
+        _tool_call(live_server, bob_token, mcp_server.list_positions, alice_account)
 
 
 def test_headerless_call_uses_fallback_token(live_server, two_users):
