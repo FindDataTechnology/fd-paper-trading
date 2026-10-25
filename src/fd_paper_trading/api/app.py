@@ -79,11 +79,17 @@ def create_app(
     # it with the app's own so one process serves REST, /ws, SPA and /mcp.
     mcp_lifespan = None
     mcp_asgi = None
+    # 自报工具面（add-self-reported-tool-surface 组 3）：fd-paper-trading 是逐用户
+    # fdt_ 凭据服务，registry 探针永远 401——工具面快照靠启动自报。state 挂在
+    # FastMCP 对象上；/health 首请求触发上报（loop 已在跑），未配置=零行为。
+    surface_mcp = None
     try:
         from ..mcp.server import mcp as _mcp
 
         mcp_asgi = _mcp.http_app(path="/")
         mcp_lifespan = mcp_asgi.lifespan
+        surface_mcp = _mcp
+        surface_mcp._wire_surface_report = "not_configured"
     except Exception:  # pragma: no cover - MCP is optional for API-only use
         pass
 
@@ -132,6 +138,16 @@ def create_app(
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict:
+        if surface_mcp is not None:
+            try:
+                from ..mcp import surface_report
+
+                surface_report.ensure_started(surface_mcp)  # 首请求触发：loop 已在跑
+                state = getattr(surface_mcp, "_wire_surface_report", "not_configured")
+                if state != "not_configured":
+                    return {"status": "ok", "last_surface_report": state}
+            except Exception:  # noqa: BLE001 — 自报态绝不影响健康面本体
+                pass
         return {"status": "ok"}
 
     # ---- MCP surface (streamable HTTP, same process/port) ----
