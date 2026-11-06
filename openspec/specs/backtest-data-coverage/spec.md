@@ -1,7 +1,8 @@
 # backtest-data-coverage Specification
 
 ## Purpose
-TBD - created by archiving change backtest-data-coverage-gate. Update Purpose after archive.
+
+约束回测取数的覆盖度事实：provider 以可选能力报告 missing / market_closed / fill_failed / fingerprint（模拟源不得冒充已检查），部分覆盖 FAILED 要点名标的与区间，休市放行而探明失败按缺失处理，权重轨逐标的检查，run 记录钉住指纹、覆盖标记与复权口径。
 
 ## Requirements
 

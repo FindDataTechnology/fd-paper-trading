@@ -1,7 +1,8 @@
 # astock-market-data Specification
 
 ## Purpose
-TBD - created by archiving change astock-price-channel. Update Purpose after archive.
+
+约束 A 股日线 provider 的取数与覆盖度语义：只读联邦视图并钉死 `source=astock_daily`（前复权，禁止跨源串价）、双写法代码归一与交易所映射、休市判定用参照篮日历且源停更上限之后一律 fail-closed、复权口径进 coverage 与 run 指纹，以及 group 数据预算对所有 provider 一视同仁。
 
 ## Requirements
 
