@@ -7,6 +7,7 @@ const base: OrderFormState = {
   order_type: "MARKET",
   quantity: "10",
   limit_price: "",
+  stop_price: "",
 };
 
 describe("validateOrder", () => {
