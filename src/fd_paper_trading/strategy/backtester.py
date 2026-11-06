@@ -30,6 +30,7 @@ from typing import Protocol
 from ..marketdata.provider import Bar
 from .costs import CostModel, CostTotals, accumulate, apply_costs
 from .ctx import Signal, StrategyContext
+from .risk_overlay import CooldownState, RiskConfig, evaluate_bar_overlay
 from .spec import CodeSpec, StrategySpec, TemplateSpec
 from .templates import make_evaluator
 
@@ -220,10 +221,22 @@ class BacktestResult:
     #: record shape is preserved exactly, not merely equivalently).
     cost_config: dict | None = None
     cost_summary: dict | None = None
+    #: Risk overlay provenance (spec: strategy-backtest "回测接受 run 级风控覆盖"):
+    #: the config used and the bars it fired on, so a user comparing two runs —
+    #: one with stops and one without — can attribute the difference. ``None``
+    #: when no overlay was configured (record shape preserved exactly).
+    risk_config: dict | None = None
+    risk_triggers: list[dict] | None = None
 
 
 def _bar_date(bar: Bar) -> date:
     return datetime.fromtimestamp(bar.ts, tz=timezone.utc).date()
+
+
+def _symbol_of(bars: list[Bar], ctx) -> str:
+    """The symbol of the replayed series (single-symbol track: all bars share
+    the instrument; the context does not carry the symbol itself)."""
+    return getattr(bars[0], "symbol", "") if bars else ""
 
 
 async def replay(
@@ -232,11 +245,15 @@ async def replay(
     initial_cash: Decimal,
     costs: CostModel | None = None,
     measure_from: int = 0,
+    risk: RiskConfig | None = None,
 ) -> BacktestResult:
     """Replay bars through the evaluator; return stats + per-bar equity.
 
     ``costs`` defaults to a disabled model, which makes every call site that
     predates the cost model behave exactly as before (identity price, zero fees).
+
+    ``risk`` defaults to no overlay, which makes every call site that predates
+    the risk overlay behave exactly as before (bit-identical — spec "缺省零变化").
 
     ``measure_from`` is the index at which **measurement** begins. Bars before it
     are still replayed — the evaluator sees them and the portfolio trades them —
@@ -263,6 +280,11 @@ async def replay(
     #: computed against, so a training period that gained 5% does not read as the
     #: test period having gained 5%.
     baseline: Decimal | None = None
+    #: Risk overlay state (only used when ``risk`` is active).
+    risk_cfg = risk if (risk is not None and risk.active) else None
+    risk_triggers: list[dict] = []
+    cooldown = CooldownState()
+    peak_value: Decimal | None = None
     for i, bar in enumerate(bars):
         ctx = StrategyContext(
             bars[: i + 1], position=portfolio.position, cash=portfolio.cash
@@ -273,7 +295,43 @@ async def replay(
             raise EvaluationError(
                 f"evaluation failed on bar {i} ({_bar_date(bar)}): {exc}"
             ) from exc
+
+        # Risk overlay (after the strategy's own signals, before applying any of
+        # them): a stop fire injects a close-out signal ahead of the strategy's
+        # own instructions, so the overlay wins the bar. Cooldown suppression
+        # drops re-entry signals for a cooling symbol (spec: 止损当根卖、策略
+        # 原样买回在构造上不可能).
+        if risk_cfg is not None:
+            if portfolio.position > 0:
+                trigger = evaluate_bar_overlay(
+                    risk_cfg, _symbol_of(bars, ctx), "SELL",
+                    entry_price=portfolio.avg_cost, peak_value=peak_value,
+                    bar_open=bar.open, bar_close=bar.close,
+                    bar_low=bar.low, bar_high=bar.high,
+                )
+            else:
+                trigger = None
+            if trigger is not None:
+                risk_triggers.append({
+                    "date": _bar_date(bar).isoformat(),
+                    "symbol": trigger.symbol,
+                    "kind": trigger.kind,
+                    "trigger_level": str(trigger.trigger_level),
+                    "fill_price": str(trigger.fill_price),
+                    "detail": trigger.detail,
+                })
+                ctx.signals.insert(0, Signal(
+                    side="SELL", quantity=abs(portfolio.position),
+                ))
+                cooldown.arm(trigger.symbol, risk_cfg.cooldown_bars)
+            if portfolio.position > 0:
+                mark = bar.close
+                peak_value = mark if peak_value is None else max(peak_value, mark)
+            cooldown.tick()
+
         for signal in ctx.signals:
+            if cooldown.suppressed(_symbol_of(bars, ctx)) and signal.side == "BUY":
+                continue  # cooldown: suppress re-entry for the cooling symbol
             _apply_signal(portfolio, signal, bar, model, totals)
         eq = portfolio.equity(bar.close)
         if i < measure_from:
@@ -292,4 +350,6 @@ async def replay(
         equity_points=curve,
         cost_config=model.to_dict() if model.enabled else None,
         cost_summary=totals.to_dict() if model.enabled else None,
+        risk_config=risk_cfg.to_dict() if risk_cfg is not None else None,
+        risk_triggers=risk_triggers or None,
     )

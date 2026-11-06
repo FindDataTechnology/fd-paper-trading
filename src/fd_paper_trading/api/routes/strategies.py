@@ -51,6 +51,7 @@ from ...strategy import (
     spec_summary,
     validate_spec,
 )
+from ...strategy.risk_overlay import RiskConfig
 from ...strategy.benchmarks import (
     DEFAULT_BENCHMARKS,
     BenchmarkResult,
@@ -338,7 +339,8 @@ def _coverage_params(symbol: str, coverage: dict | None) -> dict:
     return params
 
 
-async def _replay_single_symbol(app, run, spec, start: date, end: date, costs=None):
+async def _replay_single_symbol(app, run, spec, start: date, end: date, costs=None,
+                                risk=None):
     """The single-symbol path: one series through ``on_bar(ctx)``."""
     evaluator = build_evaluator(spec)
     days = (end - start).days + 1
@@ -355,7 +357,8 @@ async def _replay_single_symbol(app, run, spec, start: date, end: date, costs=No
     # 装载后断言（design D3 的第一处）：整体数据不得超出窗口末端。
     _assert_no_lookahead([_bar_date(b).isoformat() for b in bars],
                          end.isoformat(), where=f"symbol {spec.symbol}")
-    return await replay(bars, evaluator, Decimal(run.params["initial_cash"]), costs)
+    return await replay(bars, evaluator, Decimal(run.params["initial_cash"]), costs,
+                        risk=risk)
 
 
 async def _replay_universe(app, spec, start: date, end: date, initial_cash: Decimal, costs=None):
@@ -611,9 +614,16 @@ async def _run_backtest(app, run_id: uuid.UUID) -> None:
                 )
                 await _attach_extended_stats(app, run, result.equity_points)
             else:
+                risk_cfg = RiskConfig.from_dict(run.params.get("risk"))
                 result = await _replay_single_symbol(
-                    app, run, spec, start, end, cost_model
+                    app, run, spec, start, end, cost_model, risk=risk_cfg
                 )
+                run.params = {
+                    **(run.params or {}),
+                    **({"risk_config": result.risk_config,
+                        "risk_triggers": result.risk_triggers}
+                       if risk_cfg.active else {}),
+                }
                 await StrategyRunRepository(session).add_equity_points(
                     [
                         StrategyEquityPoint(run_id=run.id, date=d, equity=e)
@@ -684,6 +694,12 @@ async def start_backtest(
         # 即使 enabled=false 也存快照：运行记录要能回答"这次用了什么成本配置"，
         # 而"用户显式关掉了成本"与"这个请求根本没有成本字段"是两个不同的事实。
         params["cost_model"] = payload.cost_model.model_dump(mode="json")
+    if payload.risk is not None:
+        # Same snapshot rule as costs (design: 配置快照进结果): "带止损的 run"
+        # 与"没配风控的 run"的差异必须可归因（spec: Overlay provenance is
+        # recorded）。校验（范围）在 RiskConfig 构造时做。
+        RiskConfig.from_dict(payload.risk.model_dump(mode="json"))
+        params["risk"] = payload.risk.model_dump(mode="json")
     if payload.benchmarks is not None:
         params["benchmarks"] = list(payload.benchmarks)
     if payload.walk_forward_enabled:

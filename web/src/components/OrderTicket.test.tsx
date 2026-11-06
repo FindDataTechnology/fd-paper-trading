@@ -60,6 +60,7 @@ describe("OrderTicket", () => {
         order_type: "MARKET",
         quantity: "10",
         limit_price: null,
+        stop_price: null,
       })
     );
   });

@@ -112,6 +112,7 @@ class PaperExecutionService:
         limit_price: Decimal | None = None,
         client_order_id: str | None = None,
         strategy_run_id: uuid.UUID | None = None,
+        stop_price: Decimal | None = None,
     ) -> Order:
         if self.rate_limiter is not None and not self.rate_limiter.allow(account.id):
             raise OrderRejected("rate_limited", "Order rate limit exceeded")
@@ -124,9 +125,34 @@ class PaperExecutionService:
         if quote is None:
             raise OrderRejected("no_quote", f"No live quote for '{symbol}'")
 
+        # Stop-order validation (design: 疯狂组合在入口拒绝).
+        if order_type in (OrderType.STOP, OrderType.STOP_LIMIT):
+            if stop_price is None:
+                raise OrderRejected(
+                    "invalid_stop", "stop_price is required for STOP/STOP_LIMIT orders"
+                )
+            if order_type == OrderType.STOP_LIMIT and limit_price is None:
+                raise OrderRejected(
+                    "invalid_stop", "limit_price is required for STOP_LIMIT orders"
+                )
+            # Sensible trigger/fill relationship (spec: a sell stop-limit with
+            # limit_price > stop_price can never fill sensibly -> rejected).
+            if order_type == OrderType.STOP_LIMIT:
+                if side == OrderSide.SELL and limit_price > stop_price:
+                    raise OrderRejected(
+                        "invalid_stop",
+                        "sell stop-limit requires limit_price <= stop_price",
+                    )
+                if side == OrderSide.BUY and limit_price < stop_price:
+                    raise OrderRejected(
+                        "invalid_stop",
+                        "buy stop-limit requires limit_price >= stop_price",
+                    )
+
         # Simple buying-power check for buys (paper trading, no margin on cash).
         # A market or crossing-limit buy fills at the ask; a resting limit buy
-        # reserves buying power at its limit price.
+        # reserves buying power at its limit price. A stop buy reserves at its
+        # stop price (the worst case it can trigger into).
         if side == OrderSide.BUY:
             if (
                 order_type == OrderType.LIMIT
@@ -134,6 +160,8 @@ class PaperExecutionService:
                 and limit_price < quote.ask
             ):
                 ref_price = limit_price  # resting limit
+            elif order_type in (OrderType.STOP, OrderType.STOP_LIMIT):
+                ref_price = stop_price if stop_price is not None else quote.ask
             else:
                 ref_price = quote.ask  # market or crossing limit
             if account.cash_balance < quantity * ref_price:
@@ -153,12 +181,15 @@ class PaperExecutionService:
             order_type=order_type,
             quantity=quantity,
             limit_price=limit_price,
+            stop_price=stop_price,
             status=OrderStatus.PENDING,
         )
         session.add(order)
         await session.flush()
 
-        result = self.fill_engine.compute_fill(quote, side, order_type, quantity, limit_price)
+        result = self.fill_engine.compute_fill(
+            quote, side, order_type, quantity, limit_price, stop_price
+        )
 
         if result.fills:
             for price, qty in result.fills:
@@ -172,14 +203,91 @@ class PaperExecutionService:
                 if result.filled_quantity >= quantity
                 else OrderStatus.PARTIALLY_FILLED
             )
+            if order_type in (OrderType.STOP, OrderType.STOP_LIMIT):
+                # A stop whose trigger condition already holds at placement
+                # (quote gapped through the stop) fires immediately — recorded
+                # as triggered, never as "resting then magic-filled".
+                from datetime import datetime, timezone
+
+                order.triggered_at = datetime.now(timezone.utc)
         elif result.status == "OPEN":
-            order.status = OrderStatus.OPEN  # resting limit order
+            order.status = OrderStatus.OPEN  # resting limit / untriggered stop
         else:
             order.status = OrderStatus.REJECTED
             order.reject_reason = "execution engine rejected order"
 
         await session.flush()
         return order
+
+    async def evaluate_open_stops(
+        self,
+        session: AsyncSession,
+        account: Account,
+        symbol: str | None = None,
+    ) -> list[Order]:
+        """Evaluate every resting STOP/STOP_LIMIT order of one account against
+        fresh quotes (design: 触发评估挂在"新报价到达"时点).
+
+        Called whenever a new quote arrives for a symbol (order placement on
+        that symbol, a run tick, or a realtime quote broadcast). A triggered
+        STOP fills at its stop price through the same ledger path as any other
+        fill — buying-power/position checks still apply at trigger time and a
+        failure records REJECTED (no "triggered implies filled" illusion).
+        """
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+
+        stmt = (
+            select(Order)
+            .where(
+                Order.account_id == account.id,
+                Order.status == OrderStatus.OPEN,
+                Order.order_type.in_([OrderType.STOP, OrderType.STOP_LIMIT]),
+            )
+            .with_for_update()
+        )
+        if symbol is not None:
+            stmt = stmt.where(Order.symbol == symbol)
+        stops = (await session.execute(stmt)).scalars().all()
+        triggered_orders: list[Order] = []
+        for order in stops:
+            quote = await self.provider.get_quote(order.symbol)
+            if quote is None:
+                continue  # no fresh quote: nothing to evaluate against
+            result = self.fill_engine.compute_fill(
+                quote,
+                order.side,
+                order.order_type,
+                order.quantity,
+                order.limit_price,
+                order.stop_price,
+                triggered=order.triggered_at is not None,
+            )
+            if order.triggered_at is None and result.status in ("FILLED", "OPEN"):
+                # Distinguish "triggered now" from "was already a resting
+                # triggered stop-limit": for STOP, any FILLED here is a fresh
+                # trigger; for STOP_LIMIT, a fill means the trigger+limit both
+                # crossed. Either way the trigger moment is now.
+                order.triggered_at = datetime.now(timezone.utc)
+            if result.fills:
+                for price, qty in result.fills:
+                    await self._apply_fill(
+                        session, account, order, order.instrument_id,
+                        order.symbol, order.side, qty, price,
+                    )
+                order.filled_quantity = result.filled_quantity
+                order.avg_fill_price = result.avg_fill_price
+                order.status = (
+                    OrderStatus.FILLED
+                    if result.filled_quantity >= order.quantity
+                    else OrderStatus.PARTIALLY_FILLED
+                )
+                triggered_orders.append(order)
+            # Untriggered / triggered-but-resting stop-limits keep OPEN.
+        if triggered_orders:
+            await session.flush()
+        return triggered_orders
 
     async def cancel_order(self, session: AsyncSession, order: Order) -> Order:
         if order.status not in (

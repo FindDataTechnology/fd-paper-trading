@@ -57,6 +57,12 @@ from ..persistence.repositories import (
 )
 from .backtester import BarEvaluator, EvaluationError, build_evaluator
 from .ctx import StrategyContext, SymbolSeries, WeightContext
+from .risk_overlay import (
+    CooldownState,
+    RiskConfig,
+    effective_target_weight,
+    evaluate_quote_overlay,
+)
 from .spec import WeightSpec, validate_spec
 from .weight_backtester import (
     CASH_LABEL,
@@ -385,6 +391,26 @@ class PaperRunSupervisor:
             if run.status == StrategyRunStatus.STARTING:
                 run.status = StrategyRunStatus.RUNNING
                 run.started_at = run.started_at or datetime.now(UTC)
+                # Spec (strategy-live-execution): live runs record the provider's
+                # declared adjustment caliber at start, so "which price world
+                # this run trades in" is data, not convention. Providers that
+                # declare nothing leave the keys absent.
+                coverage_fn = getattr(self.app.state.market_data_provider,
+                                      "get_bars_with_coverage", None)
+                first_symbol = ((run.params or {}).get("universe") or [None])[0]
+                if coverage_fn is not None and first_symbol:
+                    try:
+                        cov = await coverage_fn(first_symbol,
+                                                datetime.now(UTC).date(),
+                                                datetime.now(UTC).date())
+                        if cov.get("adjusted"):
+                            run.params = {
+                                **(run.params or {}),
+                                "price_caliber": cov["adjusted"],
+                                "price_source": cov.get("source"),
+                            }
+                    except Exception:  # noqa: BLE001 - caliber is best-effort
+                        pass
                 await self._event(
                     session, run, await self._user_id(session, run),
                     StrategyEventType.STATE_CHANGE, "run started",
@@ -453,6 +479,12 @@ class PaperRunSupervisor:
         A weight spec is dispatched to ``_tick_weight`` before any of this:
         its contract is a target mapping per rebalance point, not signals per
         bar, so it needs its own actionability rule and order conversion.
+
+        Every tick is also a "new quote arrival" for the run's account: the
+        run's resting STOP/STOP_LIMIT orders are re-evaluated here (design:
+        触发评估挂在报价到达时点). A store failure during stop evaluation is
+        an event, not a tick failure — the strategy evaluation must not be
+        blocked by the stop ledger.
         """
         async with self.app.state.db.session_factory() as session:
             run = await session.get(StrategyRun, run_id)
@@ -495,12 +527,42 @@ class PaperRunSupervisor:
             if account is None:
                 raise EvaluationError(f"account {run.account_id} was deleted")
 
+            # New quote arrival for this tick: evaluate resting stops on the
+            # run's account before (and independent of) strategy evaluation.
+            service: PaperExecutionService = self.app.state.execution_service
+            try:
+                triggered = await service.evaluate_open_stops(session, account)
+                await session.commit()
+                for order in triggered:
+                    await self._event(
+                        session, run, strategy.user_id,
+                        StrategyEventType.ORDER,
+                        f"stop triggered: {order.symbol} {order.side} "
+                        f"{order.filled_quantity} @ {order.avg_fill_price}",
+                        {"order_id": str(order.id), "kind": "stop_triggered"},
+                    )
+                    await session.commit()
+            except Exception as exc:  # noqa: BLE001 - stop ledger must not block the run
+                await self._event(session, run, strategy.user_id,
+                                  StrategyEventType.ERROR,
+                                  f"stop evaluation failed: {exc}")
+                await session.rollback()
+
             instrument = provider.get_instrument(spec.symbol)
             instrument_id = (
                 instrument.symbol_id if instrument is not None else f"{spec.symbol}.SIM"
             )
             position = await PositionRepository(session).get(account.id, instrument_id)
             position_qty = position.quantity if position is not None else Decimal("0")
+
+            # Run-level risk overlay (spec: shared by backtest and live). The
+            # config lives on the run's params; per-bar state (peak, cooldown)
+            # is carried in run.params too so a restarted run resumes honestly.
+            risk_cfg = RiskConfig.from_dict((run.params or {}).get("risk"))
+            risk_state = (run.params or {}).get("risk_state") or {}
+            cooldown = CooldownState(remaining=dict(risk_state.get("cooldown", {})))
+            peak_value = risk_state.get("peak_value")
+            peak_value = Decimal(str(peak_value)) if peak_value is not None else None
 
             evaluator = self._evaluators.get(run_id)
             if evaluator is None:
@@ -534,10 +596,52 @@ class PaperRunSupervisor:
                                       f"evaluation failed on {_bar_date(bar)}: {exc}")
                     continue
                 evaluated_any = True
+                # Live-side overlay (same module the backtester uses — parity by
+                # construction): a trigger injects a close-out MARKET instruction
+                # ahead of the strategy's own signals for this bar.
+                if risk_cfg.active and position_qty > 0:
+                    trigger = evaluate_quote_overlay(
+                        risk_cfg, spec.symbol, "SELL",
+                        entry_price=position.avg_price if position is not None else None,
+                        peak_value=peak_value,
+                        quote_bid=bar.low,   # tick=bar replay: bar low stands in
+                        quote_ask=bar.high,  # for the quote's two sides
+                    )
+                    if trigger is not None:
+                        run.params = {**(run.params or {}), **{}}
+                        risk_triggers = (run.params or {}).setdefault(
+                            "risk_triggers", []
+                        )
+                        risk_triggers.append({
+                            "date": _bar_date(bar).isoformat(),
+                            "symbol": trigger.symbol,
+                            "kind": trigger.kind,
+                            "trigger_level": str(trigger.trigger_level),
+                            "fill_price": str(trigger.fill_price),
+                            "detail": trigger.detail,
+                        })
+                        cooldown.arm(spec.symbol, risk_cfg.cooldown_bars)
+                        from .ctx import Signal  # engine-level import guard
+
+                        ctx.signals.insert(0, Signal(
+                            side="SELL", quantity=abs(position_qty),
+                        ))
+                if peak_value is not None or risk_cfg.active:
+                    mark = bar.close
+                    peak_value = mark if peak_value is None else max(peak_value, mark)
+                cooldown.tick()
                 placed = await self._place_signals(
                     session, run, strategy, spec.symbol, account, ctx,
                     user, placed,
                 )
+                if risk_cfg.active:
+                    run.params = {
+                        **(run.params or {}),
+                        "risk_state": {
+                            "peak_value": str(peak_value) if peak_value is not None else None,
+                            "cooldown": cooldown.remaining,
+                        },
+                    }
             if not evaluated_any:
                 # Every new bar failed to evaluate; still advance so we don't
                 # retry the same bars forever.
@@ -773,6 +877,24 @@ class PaperRunSupervisor:
                 f"weight evaluation failed on {day.isoformat()}: {exc}",
             )
             return placed, snapshot, []
+
+        # Risk-overlay cooldown (spec: 止损当根卖、下个调仓点原样买回在构造上
+        # 不可能). Applied to the EFFECTIVE weights before order conversion;
+        # the snapshot records both so the deviation is attributable.
+        risk_cfg = RiskConfig.from_dict((run.params or {}).get("risk"))
+        risk_state = (run.params or {}).get("risk_state") or {}
+        cooldown = CooldownState(remaining=dict(risk_state.get("cooldown", {})))
+        effective_symbols = {
+            k: effective_target_weight(k, Decimal(str(v)), cooldown)
+            for k, v in target_symbols.items()
+        }
+        if effective_symbols != target_symbols:
+            snapshot.effective_weights = {
+                k: float(v) for k, v in effective_symbols.items()
+            }
+            target_symbols = {
+                k: float(v) for k, v in effective_symbols.items()
+            }
 
         buy_prices, sell_prices = await self._execution_prices(provider, universe, marks)
         instructions = _weight_instructions(

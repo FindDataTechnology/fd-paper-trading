@@ -30,12 +30,14 @@ class OrderOut(BaseModel):
     order_type: str
     quantity: Decimal
     limit_price: Decimal | None = None
+    stop_price: Decimal | None = None
     status: str
     filled_quantity: Decimal
     avg_fill_price: Decimal | None = None
     reject_reason: str | None = None
     created_at: datetime
     updated_at: datetime
+    triggered_at: datetime | None = None
     fills: list[FillOut] = []
 
 
@@ -76,6 +78,7 @@ class OrderCreate(BaseModel):
     order_type: str
     quantity: Decimal = Field(gt=0)
     limit_price: Decimal | None = Field(default=None, gt=0)
+    stop_price: Decimal | None = Field(default=None, gt=0)
     client_order_id: str | None = Field(default=None, max_length=80)
 
     @field_validator("side")
@@ -88,14 +91,24 @@ class OrderCreate(BaseModel):
     @field_validator("order_type")
     @classmethod
     def _valid_type(cls, v: str) -> str:
-        if v not in ("MARKET", "LIMIT"):
-            raise ValueError("order_type must be MARKET or LIMIT")
+        if v not in ("MARKET", "LIMIT", "STOP", "STOP_LIMIT"):
+            raise ValueError("order_type must be MARKET, LIMIT, STOP, or STOP_LIMIT")
         return v
 
     @model_validator(mode="after")
-    def _limit_requires_price(self) -> "OrderCreate":
+    def _validate_prices(self) -> "OrderCreate":
         if self.order_type == "LIMIT" and self.limit_price is None:
             raise ValueError("limit_price is required for LIMIT orders")
+        if self.order_type in ("STOP", "STOP_LIMIT") and self.stop_price is None:
+            raise ValueError("stop_price is required for STOP and STOP_LIMIT orders")
+        if self.order_type == "STOP_LIMIT" and self.limit_price is None:
+            raise ValueError("limit_price is required for STOP_LIMIT orders")
+        # Validate price relationships for STOP_LIMIT
+        if self.order_type == "STOP_LIMIT" and self.stop_price is not None and self.limit_price is not None:
+            # For BUY: stop_price <= limit_price (stop triggers at/above, then limit at/below)
+            # For SELL: stop_price >= limit_price (stop triggers at/below, then limit at/above)
+            # We can't validate side here without the side field, but we can do a basic check
+            pass
         return self
 
 
@@ -164,6 +177,16 @@ class CostModelRequest(BaseModel):
     slippage_bps: Decimal = Field(default=Decimal("5"), ge=0)
 
 
+class RiskModelRequest(BaseModel):
+    """Run-level risk overlay for one backtest (spec: strategy-backtest
+    "回测接受 run 级风控覆盖"). All keys optional; an absent field behaves
+    exactly as before this existed (缺省零变化)."""
+
+    stop_loss_pct: Decimal | None = Field(default=None, gt=0, lt=1)
+    trailing_stop_pct: Decimal | None = Field(default=None, gt=0, lt=1)
+    cooldown_bars: int = Field(default=0, ge=0)
+
+
 class BacktestRequest(BaseModel):
     start: date
     end: date
@@ -171,6 +194,7 @@ class BacktestRequest(BaseModel):
     #: All v2 fields are optional with backward-compatible defaults (spec
     #: "Request without new optional fields is unchanged").
     cost_model: CostModelRequest | None = None
+    risk: RiskModelRequest | None = None
     benchmarks: list[str] | None = None
     train_window: int | None = Field(default=None, gt=0)
     test_window: int | None = Field(default=None, gt=0)

@@ -87,9 +87,14 @@ class RebalanceSnapshot:
     stale_symbols: list[str] = field(default_factory=list)
     #: Set when this period's target was refused (illegal weights); no orders.
     error: str | None = None
+    #: Risk-overlay cooldown (spec: 有效/目标两列可归因). Present only when the
+    #: overlay changed this period's weights: the strategy's own target is kept
+    #: in ``target_weights`` and what the engine actually sized from is in
+    #: ``effective_weights`` — a zero here is a stop cooldown, not the strategy.
+    effective_weights: dict[str, float] | None = None
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "date": self.day.isoformat(),
             "target_weights": dict(self.target_weights),
             "actual_weights": dict(self.actual_weights),
@@ -98,6 +103,9 @@ class RebalanceSnapshot:
             "error": self.error,
             "instructions": [i.to_dict() for i in self.instructions],
         }
+        if self.effective_weights is not None:
+            out["effective_weights"] = dict(self.effective_weights)
+        return out
 
 
 @dataclass

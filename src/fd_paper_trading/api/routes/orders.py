@@ -58,6 +58,7 @@ async def place_order(
             payload.quantity,
             payload.limit_price,
             payload.client_order_id,
+            stop_price=payload.stop_price,
         )
     except OrderRejected as exc:
         status_code = 429 if exc.code == "rate_limited" else 400
@@ -67,6 +68,14 @@ async def place_order(
     # FK after the order was created, so the in-memory collection is not populated).
     order = await OrderRepository(session).get_for_user(order.id, user.id)
     assert order is not None
+    # A new quote just arrived for this symbol: evaluate this account's resting
+    # stops against it (design: 触发评估挂在"新报价到达"时点). Runs after commit
+    # so any fills it produces commit in their own transaction.
+    try:
+        await exec_service.evaluate_open_stops(session, account, symbol=payload.symbol)
+        await session.commit()
+    except OrderRejected:
+        await session.rollback()
     await _broadcast_order(request, user.id, order)
     return order
 

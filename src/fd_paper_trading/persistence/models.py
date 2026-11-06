@@ -46,6 +46,8 @@ class OrderSide:
 class OrderType:
     MARKET = "MARKET"
     LIMIT = "LIMIT"
+    STOP = "STOP"
+    STOP_LIMIT = "STOP_LIMIT"
 
 
 class OrderStatus:
@@ -216,9 +218,10 @@ class Order(Base):
     instrument_id: Mapped[str] = mapped_column(String(80), index=True)  # e.g. "AAPL.NASDAQ"
     symbol: Mapped[str] = mapped_column(String(40), index=True)
     side: Mapped[str] = mapped_column(String(8))                       # BUY / SELL
-    order_type: Mapped[str] = mapped_column(String(8))                 # MARKET / LIMIT
+    order_type: Mapped[str] = mapped_column(String(8))                 # MARKET / LIMIT / STOP / STOP_LIMIT
     quantity: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    stop_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default=OrderStatus.PENDING, index=True)
     filled_quantity: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"))
     avg_fill_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
@@ -227,6 +230,7 @@ class Order(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+    triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     account: Mapped["Account"] = relationship(back_populates="orders")
     fills: Mapped[list["Fill"]] = relationship(

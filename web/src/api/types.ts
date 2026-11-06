@@ -95,7 +95,7 @@ export interface Quote {
 }
 
 export type OrderSide = "BUY" | "SELL";
-export type OrderType = "MARKET" | "LIMIT";
+export type OrderType = "MARKET" | "LIMIT" | "STOP" | "STOP_LIMIT";
 
 export interface OrderCreate {
   account_id: string;
@@ -104,6 +104,7 @@ export interface OrderCreate {
   order_type: OrderType;
   quantity: string;
   limit_price?: string | null;
+  stop_price?: string | null;
   client_order_id?: string | null;
 }
 

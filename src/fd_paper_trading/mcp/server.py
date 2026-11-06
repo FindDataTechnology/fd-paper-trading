@@ -159,16 +159,19 @@ def place_order(
     order_type: str,
     quantity: Decimal,
     limit_price: Decimal | None = None,
+    stop_price: Decimal | None = None,
 ) -> dict:
-    """Place a new paper trading order (MARKET or LIMIT).
+    """Place a new paper trading order (MARKET, LIMIT, STOP, or STOP_LIMIT).
 
     Args:
         account_id: UUID of the target account
-        symbol: Trading symbol (e.g., "AAPL", "ETHUSDT-PERP")
+        symbol: Trading symbol (e.g., "AAPL", "600036")
         side: "BUY" or "SELL"
-        order_type: "MARKET" or "LIMIT"
+        order_type: "MARKET", "LIMIT", "STOP", or "STOP_LIMIT"
         quantity: Number of units to trade
-        limit_price: Required if order_type is "LIMIT"
+        limit_price: Required for LIMIT; required for STOP_LIMIT (the limit
+            applied after the stop triggers)
+        stop_price: Required for STOP and STOP_LIMIT (the trigger price)
 
     Returns:
         Order details including status, fills, and filled quantity on success.
@@ -183,6 +186,8 @@ def place_order(
     }
     if limit_price:
         payload["limit_price"] = float(limit_price)
+    if stop_price:
+        payload["stop_price"] = float(stop_price)
 
     success, data = _api_call("POST", "/api/v1/orders", json_data=payload)
     if success:

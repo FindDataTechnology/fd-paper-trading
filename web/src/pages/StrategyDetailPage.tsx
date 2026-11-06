@@ -142,8 +142,9 @@ export default function StrategyDetailPage() {
               className="secondary"
               onClick={() => stopPaper.mutate(activePaperRun.id)}
               disabled={stopPaper.isPending}
+              title="Stop the run: cancels its resting orders (including stop orders) but keeps positions"
             >
-              {stopPaper.isPending ? "Stopping…" : "Stop"}
+              {stopPaper.isPending ? "Stopping…" : "Stop run"}
             </button>
           </div>
         ) : (

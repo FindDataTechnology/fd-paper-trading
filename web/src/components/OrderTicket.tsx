@@ -22,6 +22,7 @@ export default function OrderTicket({ symbol, accountId }: Props) {
     order_type: "MARKET",
     quantity: "",
     limit_price: "",
+    stop_price: "",
   });
   const [confirmOverwrite, setConfirmOverwrite] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
@@ -47,7 +48,14 @@ export default function OrderTicket({ symbol, accountId }: Props) {
         side: form.side as OrderSide,
         order_type: form.order_type as OrderType,
         quantity: form.quantity,
-        limit_price: form.order_type === "LIMIT" ? form.limit_price : null,
+        limit_price:
+          form.order_type === "LIMIT" || form.order_type === "STOP_LIMIT"
+            ? form.limit_price
+            : null,
+        stop_price:
+          form.order_type === "STOP" || form.order_type === "STOP_LIMIT"
+            ? form.stop_price
+            : null,
       });
       setSuccess("Order submitted");
       setForm((f) => ({ ...f, quantity: "" }));
@@ -88,6 +96,8 @@ export default function OrderTicket({ symbol, accountId }: Props) {
           <select value={form.order_type} onChange={(e) => update("order_type", e.target.value as OrderType)}>
             <option value="MARKET">MARKET</option>
             <option value="LIMIT">LIMIT</option>
+            <option value="STOP">STOP</option>
+            <option value="STOP_LIMIT">STOP_LIMIT</option>
           </select>
         </label>
         <label className="col" style={{ flex: 1 }}>
@@ -108,10 +118,33 @@ export default function OrderTicket({ symbol, accountId }: Props) {
             />
           </label>
         )}
+        {(form.order_type === "STOP" || form.order_type === "STOP_LIMIT") && (
+          <label className="col" style={{ flex: 1 }}>
+            <span className="muted" style={{ fontSize: 12 }}>
+              Stop price{form.order_type === "STOP" ? " (trigger → fills at stop)" : " (trigger price)"}
+            </span>
+            <input
+              value={form.stop_price}
+              inputMode="decimal"
+              onChange={(e) => update("stop_price", e.target.value)}
+            />
+          </label>
+        )}
+        {form.order_type === "STOP_LIMIT" && (
+          <label className="col" style={{ flex: 1 }}>
+            <span className="muted" style={{ fontSize: 12 }}>Limit after trigger</span>
+            <input
+              value={form.limit_price}
+              inputMode="decimal"
+              onChange={(e) => update("limit_price", e.target.value)}
+            />
+          </label>
+        )}
       </div>
 
       {result.errors.quantity && <div className="error-text">{result.errors.quantity}</div>}
       {result.errors.limit_price && <div className="error-text">{result.errors.limit_price}</div>}
+      {result.errors.stop_price && <div className="error-text">{result.errors.stop_price}</div>}
       {result.errors.symbol && <div className="error-text">{result.errors.symbol}</div>}
       {result.warning && (
         <div className="warning-text">
