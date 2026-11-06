@@ -106,6 +106,29 @@ def test_checked_params_carry_fingerprint_and_counts() -> None:
     assert params["market_closed_count"] == 1
 
 
+def test_params_record_adjustment_caliber_when_declared() -> None:
+    """spec backtest-data-coverage: 口径随 run 留痕，不声明时不臆造。
+
+    A provider that declares its caliber (the astock provider: forward-
+    adjusted) must have it land in the run params so two runs that disagree
+    can be told apart by caliber instead of mystery. A provider that declares
+    nothing (the existing stubs) must leave the key absent — never a guessed
+    "none"/"forward".
+    """
+    params = _coverage_params("600036", {
+        "fingerprint": "abc",
+        "missing": [], "market_closed": [],
+        "adjusted": "forward", "source": "astock_daily",
+    })
+    assert params["adjusted"] == "forward"
+    assert params["source"] == "astock_daily"
+    undeclared = _coverage_params("AAPL", {
+        "fingerprint": "abc", "missing": [], "market_closed": [],
+    })
+    assert "adjusted" not in undeclared
+    assert "source" not in undeclared
+
+
 # ---------------------------------------------------------------------------
 # the optional-capability probe
 # ---------------------------------------------------------------------------

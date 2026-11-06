@@ -17,7 +17,7 @@
 - **订单执行** — 市价单和限价单，通过无状态纯 Python 撮合计算器进行模拟成交
 - **持仓与资金账本** — 实时盈亏、平均成本、已实现收益
 - **实时推送** — WebSocket 端点（`/ws`）推送实时行情、订单状态和成交事件
-- **市场数据** — `SimulatedMarketDataProvider`（确定性，用于开发/测试）和 `PolygonMarketDataProvider`（真实价格，免费套餐为收盘价）
+- **市场数据** — `SimulatedMarketDataProvider`（确定性，用于开发/测试）、`PolygonMarketDataProvider`（真实价格，免费套餐为收盘价）、**`AstockMarketDataProvider`**（前复权 A 股日线，钉源 `astock_daily`，通过联邦视图读取 4,576 只 2006–2026 年数据；需配置 `ASTOCK_DSN`，详见 `.env.example`）
 - **Web 界面** — React + TypeScript 单页应用，提供专业交易工作台：
   - **三栏布局**：自选股列表（实时报价）、价格图表和下单面板
   - **点击交易**：从自选股列表选择任意标的，图表和下单表单即时更新

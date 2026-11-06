@@ -35,6 +35,7 @@ _LAZY = {
     "SIM_VENUE": ".simulated",
     "PolygonMarketDataProvider": ".polygon",
     "FdOpenDataMarketDataProvider": ".fd_open_data",
+    "AstockMarketDataProvider": ".astock",
 }
 
 
@@ -52,13 +53,16 @@ def __getattr__(name: str):
         from .simulated import SimulatedMarketDataProvider
         from .polygon import PolygonMarketDataProvider
         from .fd_open_data import FdOpenDataMarketDataProvider
+        from .astock import AstockMarketDataProvider
 
         def build_market_data_provider(settings: Settings) -> MarketDataProvider:
             """Select a market-data provider from ``settings``.
 
             ``fd-open-data`` -> ``FdOpenDataMarketDataProvider``; ``polygon``
-            (with an API key) -> ``PolygonMarketDataProvider``; any other value
-            (including ``simulated`` and unset/unknown) ->
+            (with an API key) -> ``PolygonMarketDataProvider``; ``astock``
+            (with a read-only DSN, else a startup error) ->
+            ``AstockMarketDataProvider``; any other value (including
+            ``simulated`` and unset/unknown) ->
             ``SimulatedMarketDataProvider``. This is the single home for the
             fallthrough rule in the ``market-data`` spec.
             """
@@ -66,6 +70,18 @@ def __getattr__(name: str):
                 return FdOpenDataMarketDataProvider()
             if settings.market_data_provider == "polygon":
                 return PolygonMarketDataProvider(api_key=settings.market_data_api_key)
+            if settings.market_data_provider == "astock":
+                if not settings.astock_dsn:
+                    raise RuntimeError(
+                        "MARKET_DATA_PROVIDER=astock requires ASTOCK_DSN "
+                        "(read-only federated-view DSN); refusing to fall "
+                        "through to another provider"
+                    )
+                return AstockMarketDataProvider(
+                    dsn=settings.astock_dsn,
+                    source=settings.astock_source,
+                    calendar_refs=settings.astock_calendar_refs,
+                )
             return SimulatedMarketDataProvider()
 
         globals()[name] = build_market_data_provider
@@ -88,6 +104,7 @@ __all__ = [
     "SimulatedMarketDataProvider",
     "PolygonMarketDataProvider",
     "FdOpenDataMarketDataProvider",
+    "AstockMarketDataProvider",
     "SIM_VENUE",
     "build_market_data_provider",
 ]

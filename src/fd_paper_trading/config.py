@@ -47,6 +47,21 @@ class Settings(BaseSettings):
     market_data_api_key: str = ""
     per_user_symbol_limit: int = 20
 
+    # ---- astock provider (spec: astock-market-data) ----
+    # Read-only DSN over the platform store's federated view
+    # (semantic_observations_all). Selecting MARKET_DATA_PROVIDER=astock
+    # without a DSN is a startup error, never a silent fallback
+    # (service-deployment: 凭据经部署环境注入；未配置选它即明确失败).
+    astock_dsn: str = ""
+    # The pinned source family inside the federated view: the curated
+    # forward-adjusted A-share daily rows (design D1). One series, one source.
+    astock_source: str = "astock_daily"
+    # Reference basket whose trading days ARE the market calendar (a weekday
+    # where most of these did not trade is a proven holiday; a weekday where
+    # they traded but the symbol did not is a symbol-level hole). Blue chips
+    # with dense full-history rows in the pinned source — see astock.py.
+    astock_calendar_refs: str = "600000,600036,600585,600900,601318"
+
     # ---- fd-open-data concept family ----
     # The concept the fd-open-data provider reads, as (code, entity_type,
     # frequency). Defaults to fund NAV, the family with real production data

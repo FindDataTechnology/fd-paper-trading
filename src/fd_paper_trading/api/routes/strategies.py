@@ -315,15 +315,27 @@ def _gate_coverage(symbol: str, coverage: dict) -> None:
 
 
 def _coverage_params(symbol: str, coverage: dict | None) -> dict:
-    """The run-record slice of a coverage check (design D4)."""
+    """The run-record slice of a coverage check (design D4).
+
+    ``adjusted`` records the series' price caliber when the provider declares
+    one (spec backtest-data-coverage: 口径随 run 留痕), so two runs of the same
+    strategy that disagree can be told apart by caliber instead of mystery.
+    Providers that declare nothing leave the key absent — "unchecked caliber",
+    never a guessed "none".
+    """
     if coverage is None:
         return {"coverage_checked": False}
-    return {
+    params = {
         "coverage_checked": True,
         "fingerprint": coverage.get("fingerprint") or "",
         "missing_count": len(coverage.get("missing") or []),
         "market_closed_count": len(coverage.get("market_closed") or []),
     }
+    if coverage.get("adjusted"):
+        params["adjusted"] = coverage["adjusted"]
+    if coverage.get("source"):
+        params["source"] = coverage["source"]
+    return params
 
 
 async def _replay_single_symbol(app, run, spec, start: date, end: date, costs=None):
