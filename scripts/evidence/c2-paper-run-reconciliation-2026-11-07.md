@@ -47,3 +47,19 @@ RUNNING、零 error 事件、首 tick 消费到 pinned source 真实 bar，
   经 FDW `ft_sem_obs_xinru3` 联邦视图透出。
 - tick poll 默认 1800s（design D5）；本验等待两轮后才见首 tick。
 - pod 需手动 delete 才能重读 envFrom secret（envFrom 不热载）。
+
+## 挂账清偿（2026-11-07 上午追加）
+
+| 挂账 | 终态 |
+|---|---|
+| template run `price_caliber` 不落 | **已修+已上产**。两滚：sha-6489ed8（`_mark_running` 以 `spec.symbol` 兜底）→ sha-f0d90d9（探针窗 35d）→ **sha-ae999e8（探针窗 400d，实测 35d 仍会在跨月滞后源上落 unknown）**。终验 run a1405764：`price_caliber=forward / price_source=astock_daily / last_bar_date=2026-07-10` 全落库。修法演进中实测两个中间态（same-day→unknown；35d→unknown），最终以 400d 窗跨过 feed 滞后；unprovable 尾巴如实 missing 不动声明口径。381 passed 全绿。 |
+| CI 前端未处理错误 | 已修（a1a6fcc）：BacktestPanel 测试 stub 双图组件——jsdom 无布局引擎，lightweight-charts 首次 adjust 异步抛 `Value is null`。61/61 绿、tsc 绿。 |
+| `deployToRegistry` >120s | **定因立档不修**：deployToRegistry 自身是串行小请求（composeAgentCard 纯函数、PUT+toggle/agent），慢在 registry `PUT /api/agents/register` 内部的注册时安全扫描（匿名拉 SKILL.md×技能 + 后端卡片探测）。修法属 registry 侧（扫描并行化/异步化），另立 change。 |
+| rotation pack 重发 | **v10 已发布**（packId noL2XKaTZP2kiERrC_gtKA）。发布拦两道既有门：官方 en 覆盖 7/8（缺 `i18n.en.tags`）→ 按「en tags 数须与 zh 对齐」规约补 4 枚后过门。v10 的 rotation-ranking 内容与已推 finddata-skills@0160eb2 逐字节一致（manifest==repo True）。**面板重部署待做**：deploy 路由按设计只认用户会话（柏讯面板），生产鉴权不绕行；重部署后 served descriptor 才从 v9 → v10。 |
+| DAAS 仓 spec 树 27 个 strict 失败 | **42/42 全绿**。三类机械修：column-provenance/data-snapshots（REMOVED 能力补 SHALL 需求体）、data-fetch-gateway（泛别名需求补场景块）、24 个占位 Purpose 逐个按 spec 正文写实。openspec/ 在该仓为有意本地（gitignore），不随仓推。批6 A线 seed/refresh 三脚本已上仓（gitee acaaa90）。 |
+| cheap3 磁盘三度复发（08:57 DiskPressure，80%） | 处置完成：docker 未用镜像 prune（-2.9G）+ k3s crictl prune + 44 个 Evicted 尸体 pod 清零 → DiskPressure=False、facet 200、fpt health ok。**真因立档：cell 1da519d4（壹座）`data/trace.db` 已 2.1G 持续增长**——回合 trace 无限累积是周期性复发根源，治理（trace 轮转/上限）需产品面决策，另账。facet hostPath 钉死 cheap3 的结构性风险再次实证。 |
+
+新挂账（本次新立）：
+1. registry 注册时安全扫描串行化（deployToRegistry >120s 的真实来源）——立 change。
+2. cell trace.db 无限增长（1da519d4 已 2.1G；2b043ce0 2.1G 同型）——trace 轮转/上限产品决策。
+3. rotation pack v10 面板重部署（用户动作，30 秒）。
