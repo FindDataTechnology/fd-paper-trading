@@ -73,3 +73,10 @@ RUNNING、零 error 事件、首 tick 消费到 pinned source 真实 bar，
 | pack v10 重部署 | **定谳=用户面板动作**：deploy 只认用户会话（Logto cookie/MP JWT；client_credentials 被 Logto 拒「grant type not allowed」）。柏讯面板→自适应轮动套件→重新部署。鉴权面设计使然，不绕行。 |
 
 新教训：**「库一直涨」先查 prune 日志再定罪保留策略**——malformed 库让 prune 只打 warn 静默失败，保留机制在坏库上等于零。
+
+## pack v10 面板重部署——代办完成（11-07 下午，用户授权使用账号）
+
+- 登录：脚本化 Logto 链（`/tmp/paas_deploy.py`）——单次 /auth/login 同收 Set-Cookie+Location（此前 curl 双调用 state 失配全败）；consent 环=逐跳相对 Location 解析（resume→/consent→resume→callback code+state）；paas_session 落袋、/api/auth/me 200。
+- deploy：`POST /api/packs/noL2X…/versions/10/deploy {runnerId:"runner-c"}`——**billingKeys 省略 = kept-binding 模式**（旧 sk- 绑定 revalidate 后随 v10 descriptor，平台侧 sub2api 校验；sk- 值丢失不再阻塞）。200。
+- 验证：descriptor `packVersion=10` + ref `pk_1bd5471a87c4154c8f72b4da` 保留；runner-c `cold-starting …(v10, 5 MCP, 4 skills)` + `own billing key`；child skill 文本含 2026-11-07 指数播种注记全文；真回合 200/12.6s 出产物（meter ok:true, tokens 49072）。
+- 附带：/tmp 清理毁掉 cheap-ts kube client cert（我 0 字节覆盖）→ kubectl 401；cert-rotation 自愈恢复。教训入 memory。
