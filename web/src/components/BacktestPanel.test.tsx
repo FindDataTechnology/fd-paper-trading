@@ -20,6 +20,12 @@ vi.mock("../api/client", () => ({
   },
 }));
 
+// lightweight-charts needs a real layout engine; jsdom has none, and the
+// widget throws async during its first adjust (unhandled error fails CI).
+// Chart internals are not this panel's subject — stub both chart surfaces.
+vi.mock("./EquityCurveChart", () => ({ default: () => <div data-testid="equity-chart-stub" /> }));
+vi.mock("./PriceChart", () => ({ default: () => <div data-testid="price-chart-stub" /> }));
+
 // BacktestPanel doesn't touch realtime, but the import chain pulls it in.
 vi.mock("../realtime/useRealtime", () => ({
   useStrategyEvents: () => undefined,
