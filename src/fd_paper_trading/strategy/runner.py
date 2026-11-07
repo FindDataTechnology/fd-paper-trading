@@ -397,7 +397,21 @@ class PaperRunSupervisor:
                 # declare nothing leave the keys absent.
                 coverage_fn = getattr(self.app.state.market_data_provider,
                                       "get_bars_with_coverage", None)
-                first_symbol = ((run.params or {}).get("universe") or [None])[0]
+                # Weight runs carry the universe in params; template/code runs
+                # carry a single symbol on the strategy spec — both trade a
+                # price world that must be recorded (spec: strategy-live-
+                # execution; gap found by the 2026-11-07 three-way check).
+                first_symbol = (
+                    (run.params or {}).get("universe") or [None]
+                )[0]
+                if first_symbol is None and coverage_fn is not None:
+                    strategy = await session.get(Strategy, run.strategy_id)
+                    if strategy is not None:
+                        try:
+                            spec = validate_spec(strategy.spec)
+                            first_symbol = getattr(spec, "symbol", None)
+                        except Exception:  # noqa: BLE001 - caliber is best-effort
+                            first_symbol = None
                 if coverage_fn is not None and first_symbol:
                     try:
                         cov = await coverage_fn(first_symbol,

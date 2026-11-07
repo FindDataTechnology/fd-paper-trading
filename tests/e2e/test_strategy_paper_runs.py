@@ -417,3 +417,72 @@ async def test_e2e_start_tick_order_stop(client, app):
     r = await client.post(f"/api/v1/strategy-runs/{run_id}/stop", headers=h)
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "STOPPED"
+
+
+# ---------------------------------------------------------------------------
+# Caliber recording (spec: strategy-live-execution; 2026-11-07 three-way check)
+# ---------------------------------------------------------------------------
+
+
+class _CoverageProvider(_ControlledProvider):
+    """SIM provider that declares an adjustment caliber + source."""
+
+    async def get_bars_with_coverage(self, symbol, start, end):
+        return {"adjusted": "forward", "source": "astock_daily"}
+
+
+@pytest.mark.asyncio
+async def test_mark_running_records_caliber_for_template_run(client, app):
+    """Template runs carry the symbol on the spec (not params.universe);
+    the caliber must still be recorded from it."""
+    provider = await _wire(app, provider=_CoverageProvider())
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h)
+    run_id = await _make_run_db(app, uuid.UUID(strat["id"]), account_id)
+
+    sup = app.state.strategy_runner
+    await sup._mark_running(run_id)
+
+    async with app.state.db.session_factory() as session:
+        run = await session.get(StrategyRun, run_id)
+        assert run.status == StrategyRunStatus.RUNNING
+        assert run.params["price_caliber"] == "forward"
+        assert run.params["price_source"] == "astock_daily"
+    _ = provider  # keep linters calm about the unused-looking wire helper
+
+
+@pytest.mark.asyncio
+async def test_mark_running_records_caliber_for_weight_run(client, app):
+    """Weight runs carry the universe in params — the original path stays."""
+    provider = await _wire(app, provider=_CoverageProvider())
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    weight_spec = {
+        "kind": "weight",
+        "universe": ["600000", "600036"],
+        "rebalance": {"every_n_bars": 1},
+        "weights_series": {"2026-01-01": {"600000": 0.5, "600036": 0.5}},
+    }
+    strat = await _make_strategy(client, h, spec=weight_spec, name="w")
+    sid = uuid.UUID(strat["id"])
+    async with app.state.db.session_factory() as session:
+        run = StrategyRun(
+            strategy_id=sid,
+            strategy_version=1,
+            mode=StrategyRunMode.PAPER,
+            account_id=account_id,
+            status=StrategyRunStatus.STARTING,
+            params={"universe": ["600000", "600036"]},
+        )
+        session.add(run)
+        await session.commit()
+        run_id = run.id
+
+    sup = app.state.strategy_runner
+    await sup._mark_running(run_id)
+
+    async with app.state.db.session_factory() as session:
+        run = await session.get(StrategyRun, run_id)
+        assert run.params["price_caliber"] == "forward"
+        assert run.params["price_source"] == "astock_daily"
