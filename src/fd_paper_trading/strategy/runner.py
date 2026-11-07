@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import math
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Mapping, Sequence
 
@@ -414,8 +414,12 @@ class PaperRunSupervisor:
                             first_symbol = None
                 if coverage_fn is not None and first_symbol:
                     try:
+                        # A real trailing window, not same-day: a provider whose
+                        # data lags (e.g. astock_daily to 2026-07-10) fails
+                        # closed on a same-day probe and would report
+                        # adjusted=unknown even though it declares a caliber.
                         cov = await coverage_fn(first_symbol,
-                                                datetime.now(UTC).date(),
+                                                datetime.now(UTC).date() - timedelta(days=35),
                                                 datetime.now(UTC).date())
                         if cov.get("adjusted"):
                             run.params = {

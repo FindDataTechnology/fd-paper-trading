@@ -425,10 +425,19 @@ async def test_e2e_start_tick_order_stop(client, app):
 
 
 class _CoverageProvider(_ControlledProvider):
-    """SIM provider that declares an adjustment caliber + source."""
+    """SIM provider that declares an adjustment caliber + source.
+
+    Mirrors a lagging real source: a same-day window is entirely missing and
+    fails closed (adjusted=unknown); a trailing window resolves the caliber.
+    The 35-day window contract is asserted, not assumed.
+    """
 
     async def get_bars_with_coverage(self, symbol, start, end):
-        return {"adjusted": "forward", "source": "astock_daily"}
+        window_days = (end - start).days
+        return {
+            "adjusted": "forward" if window_days >= 30 else "unknown",
+            "source": "astock_daily",
+        }
 
 
 @pytest.mark.asyncio
