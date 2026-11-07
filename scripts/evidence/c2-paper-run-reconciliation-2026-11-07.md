@@ -63,3 +63,13 @@ RUNNING、零 error 事件、首 tick 消费到 pinned source 真实 bar，
 1. registry 注册时安全扫描串行化（deployToRegistry >120s 的真实来源）——立 change。
 2. cell trace.db 无限增长（1da519d4 已 2.1G；2b043ce0 2.1G 同型）——trace 轮转/上限产品决策。
 3. rotation pack v10 面板重部署（用户动作，30 秒）。
+
+## 挂账二次清偿（11-07 午后，「处理所有挂账，然后归档」轮）
+
+| 项 | 终态 |
+|---|---|
+| deployToRegistry >120s | **已实施**：paas `lib/agent-serving.js` 两阶段并行（技能 fan-out 并行 + agent 注册 Promise.all，端口规划保持串行）。慢源定谳=registry 注册时对每 agent 跑 a2a-scanner 子进程（`agent_security_scan_on_registration=true`，≤60s/agent；skill-scanner 只在手动 rescan）。commit c1cdeb79a（paas main，经 release 分支 3e27118d4 cherry-pick+rebase）。agent-serving 家族 126/126 绿。**未滚版**——随 paas 下次出片生效。 |
+| cell trace.db「无限增长」 | **定谳翻案+根治**：trace.js 本有每小时 prune+增量 vacuum；真根因=cell 1da519d4 的 trace.db **SQLite malformed**（`prune failed: database disk image is malformed`）→ prune 静默失败 → 只增不减。处置：`TRACE_RETENTION_DAYS=3` 上产（2f77dd0，env 验证）+ 坏库备份（cheap3:/opt/trace-db-1da519d4-broken-20261107.bak.gz，424M）+ 移出删除 → 磁盘 80%→75%，下次使用重建空库。对照：3fdc7b8e 正常 pruned 36632 rows。 |
+| pack v10 重部署 | **定谳=用户面板动作**：deploy 只认用户会话（Logto cookie/MP JWT；client_credentials 被 Logto 拒「grant type not allowed」）。柏讯面板→自适应轮动套件→重新部署。鉴权面设计使然，不绕行。 |
+
+新教训：**「库一直涨」先查 prune 日志再定罪保留策略**——malformed 库让 prune 只打 warn 静默失败，保留机制在坏库上等于零。
