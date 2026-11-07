@@ -416,10 +416,14 @@ class PaperRunSupervisor:
                     try:
                         # A real trailing window, not same-day: a provider whose
                         # data lags (e.g. astock_daily to 2026-07-10) fails
-                        # closed on a same-day probe and would report
-                        # adjusted=unknown even though it declares a caliber.
+                        # closed on a same-day probe (empty observed series)
+                        # and would report adjusted=unknown even though it
+                        # declares a caliber. 400 days keeps a real bar in the
+                        # window across a multi-month feed lag; the unprovable
+                        # tail stays honestly 'missing' without touching the
+                        # declared caliber.
                         cov = await coverage_fn(first_symbol,
-                                                datetime.now(UTC).date() - timedelta(days=35),
+                                                datetime.now(UTC).date() - timedelta(days=400),
                                                 datetime.now(UTC).date())
                         if cov.get("adjusted"):
                             run.params = {

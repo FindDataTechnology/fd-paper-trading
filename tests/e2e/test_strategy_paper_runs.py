@@ -435,7 +435,7 @@ class _CoverageProvider(_ControlledProvider):
     async def get_bars_with_coverage(self, symbol, start, end):
         window_days = (end - start).days
         return {
-            "adjusted": "forward" if window_days >= 30 else "unknown",
+            "adjusted": "forward" if 30 <= window_days <= 500 else "unknown",
             "source": "astock_daily",
         }
 
