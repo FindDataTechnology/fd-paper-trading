@@ -288,8 +288,8 @@ class FdOpenDataMarketDataProvider(MarketDataProvider):
         finally:
             session.close()
 
-    async def get_latest_close(self, symbol: str) -> Decimal | None:
-        """Most recent close within the lookback window; None on a data gap."""
+    async def _latest_close_point(self, symbol: str) -> tuple[str, Decimal] | None:
+        """Most recent ``(date, close)`` within the lookback window; None on a gap."""
         end = date.today()
         start = end - timedelta(days=_QUOTE_LOOKBACK_DAYS)
         closes = await asyncio.to_thread(
@@ -297,15 +297,29 @@ class FdOpenDataMarketDataProvider(MarketDataProvider):
         )
         if not closes:
             return None
-        return closes[-1][1]
+        return closes[-1]
+
+    async def get_latest_close(self, symbol: str) -> Decimal | None:
+        """Most recent close within the lookback window; None on a data gap."""
+        point = await self._latest_close_point(symbol)
+        return point[1] if point is not None else None
 
     async def get_quote(self, symbol: str) -> Quote | None:
-        """Quote derived from the latest close ±5 bps; None on a data gap."""
+        """Quote derived from the latest close ±5 bps; None on a data gap.
+
+        ``ts_event`` is stamped from the bar's own date (midnight UTC), so the
+        execution layer's staleness guard can tell a fresh close from one the
+        ontology has not updated in weeks — without it the guard would be a
+        no-op for this provider.
+        """
         try:
-            close = await self.get_latest_close(symbol)
+            point = await self._latest_close_point(symbol)
         except Exception:
             logger.exception("get_quote: error fetching close for %s", symbol)
             return None
+        if point is None:
+            return None
+        bar_date, close = point
         if close is None or close <= 0:
             return None
         half = (close * _HALF_SPREAD_BPS).quantize(_PRICE_Q)
@@ -315,6 +329,7 @@ class FdOpenDataMarketDataProvider(MarketDataProvider):
             instrument_id=f"{symbol}.{SIM_VENUE}",
             bid=(close - half).quantize(_PRICE_Q),
             ask=(close + half).quantize(_PRICE_Q),
+            ts_event=_date_to_ts(_normalize_date(bar_date)),
         )
 
     def get_instrument(self, symbol: str):

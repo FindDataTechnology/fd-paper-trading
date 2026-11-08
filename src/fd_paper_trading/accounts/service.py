@@ -11,15 +11,25 @@ from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
+from ..marketdata import MarketDataProvider
 from ..persistence.models import Account, BalanceTransaction, OrderStatus
 from ..persistence.repositories import AccountRepository
+from ..valuation import marked_equity
 
 
 class AccountService:
-    def __init__(self, session: AsyncSession, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        settings: Settings | None = None,
+        provider: MarketDataProvider | None = None,
+    ) -> None:
         self.session = session
         self.repo = AccountRepository(session)
         self.settings = settings or get_settings()
+        # Optional: with it, equity marks positions at the latest close; without
+        # it, the shared helper falls back to book value.
+        self.provider = provider
 
     async def create(
         self,
@@ -72,13 +82,14 @@ class AccountService:
     async def summary(self, account: Account) -> dict:
         open_orders = await self.repo.count_open_orders(account.id)
         open_positions = sum(1 for p in account.positions if p.quantity != 0)
+        equity = await marked_equity(self.session, account, self.provider)
         return {
             "id": account.id,
             "name": account.name,
             "venue": account.venue,
             "currency": account.currency,
             "cash_balance": account.cash_balance,
-            "equity": account.cash_balance,  # cash-only until positions are marked to market
+            "equity": equity,
             "open_positions": open_positions,
             "open_orders": open_orders,
             "created_at": account.created_at,

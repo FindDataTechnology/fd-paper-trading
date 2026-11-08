@@ -201,6 +201,14 @@ class Account(Base):
 
 class Order(Base):
     __tablename__ = "orders"
+    # Idempotency: one order per (account, client_order_id). NULL client ids
+    # stay multi-allowed (NULLs are distinct in a unique index on both PG and
+    # SQLite), so manually-placed orders are unaffected.
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "client_order_id", name="uq_orders_account_client_order_id"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     account_id: Mapped[uuid.UUID] = mapped_column(
@@ -368,6 +376,15 @@ class StrategyRun(Base):
     #: output most easily misread as a recommendation, so the disclaimer is data.
     in_sample: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: Single-writer lease. During a rolling update two pods overlap, and both
+    #: would poll the same bars and place the same orders — the "already
+    #: processed" guard is written *after* the orders go in, so it cannot stop
+    #: the duplicate. The owner is a per-process token; the deadline lets a
+    #: crashed owner expire instead of blocking the run forever.
+    runner_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    runner_lease_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     stopped_at: Mapped[datetime | None] = mapped_column(

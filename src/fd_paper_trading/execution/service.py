@@ -18,7 +18,7 @@ from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..marketdata import MarketDataProvider
+from ..marketdata import MarketDataProvider, Quote
 from ..persistence.models import (
     Account,
     BalanceTransaction,
@@ -29,8 +29,16 @@ from ..persistence.models import (
     OrderType,
     Position,
 )
-from ..persistence.repositories import PositionRepository
+from ..persistence.repositories import OrderRepository, PositionRepository
 from .fill_engine import FillResult, SimFillEngine
+
+# How old a quote may be and still be traded against. Daily-close-derived quotes
+# (``fd_open_data``) stay valid through a weekend or a short holiday, so the
+# bound is ~one trading day of calendar slack rather than 24h sharp. A quote
+# whose source did not stamp ``ts_event`` (0 = unknown) is never treated as
+# stale: only some providers stamp it, and rejecting on "unknown" would reject
+# every simulated/derived quote.
+MAX_QUOTE_AGE_SECONDS = 4 * 24 * 60 * 60
 
 
 class OrderRejected(Exception):
@@ -92,9 +100,11 @@ class PaperExecutionService:
         fill_engine: SimFillEngine | None = None,
         rate_limit_per_second: float = 0,
         rate_limit_burst: float = 20,
+        max_quote_age_seconds: float = MAX_QUOTE_AGE_SECONDS,
     ) -> None:
         self.provider = provider
         self.fill_engine = fill_engine or SimFillEngine()
+        self.max_quote_age_seconds = max_quote_age_seconds
         self.rate_limiter = (
             RateLimiter(rate_limit_per_second, rate_limit_burst)
             if rate_limit_per_second > 0
@@ -114,6 +124,16 @@ class PaperExecutionService:
         strategy_run_id: uuid.UUID | None = None,
         stop_price: Decimal | None = None,
     ) -> Order:
+        # Idempotency: a replay of a submission already accepted under this key
+        # returns the order that key produced. Nothing is re-fetched, re-priced
+        # or re-applied, so a retry cannot move cash twice.
+        if client_order_id is not None:
+            existing = await OrderRepository(session).get_by_client_order_id(
+                account.id, client_order_id
+            )
+            if existing is not None:
+                return existing
+
         if self.rate_limiter is not None and not self.rate_limiter.allow(account.id):
             raise OrderRejected("rate_limited", "Order rate limit exceeded")
 
@@ -124,6 +144,7 @@ class PaperExecutionService:
         quote = await self.provider.get_quote(symbol)
         if quote is None:
             raise OrderRejected("no_quote", f"No live quote for '{symbol}'")
+        self._require_fresh_quote(symbol, quote)
 
         # Stop-order validation (design: 疯狂组合在入口拒绝).
         if order_type in (OrderType.STOP, OrderType.STOP_LIMIT):
@@ -149,25 +170,12 @@ class PaperExecutionService:
                         "buy stop-limit requires limit_price >= stop_price",
                     )
 
-        # Simple buying-power check for buys (paper trading, no margin on cash).
-        # A market or crossing-limit buy fills at the ask; a resting limit buy
-        # reserves buying power at its limit price. A stop buy reserves at its
-        # stop price (the worst case it can trigger into).
-        if side == OrderSide.BUY:
-            if (
-                order_type == OrderType.LIMIT
-                and limit_price is not None
-                and limit_price < quote.ask
-            ):
-                ref_price = limit_price  # resting limit
-            elif order_type in (OrderType.STOP, OrderType.STOP_LIMIT):
-                ref_price = stop_price if stop_price is not None else quote.ask
-            else:
-                ref_price = quote.ask  # market or crossing limit
-            if account.cash_balance < quantity * ref_price:
-                raise OrderRejected(
-                    "insufficient_buying_power", "Not enough cash for this order"
-                )
+        # Buying power is checked here and again at stop-trigger time (the cash
+        # may have gone elsewhere between placement and trigger) — same helper,
+        # so the two paths cannot drift.
+        self._check_buying_power(
+            account, side, order_type, quantity, limit_price, stop_price, quote
+        )
 
         instrument_id = instrument.symbol_id  # e.g. "AAPL.SIM"
         order = Order(
@@ -219,6 +227,64 @@ class PaperExecutionService:
         await session.flush()
         return order
 
+    @staticmethod
+    def _check_buying_power(
+        account: Account,
+        side: str,
+        order_type: str,
+        quantity: Decimal,
+        limit_price: Decimal | None,
+        stop_price: Decimal | None,
+        quote: Quote,
+    ) -> None:
+        """Reject a buy the account's cash cannot cover (no margin, paper only).
+
+        A market or crossing-limit buy fills at the ask; a resting limit buy
+        reserves buying power at its limit price; a stop buy reserves at its
+        stop price (the worst case it can trigger into). Shared by order
+        placement and stop-trigger evaluation so both price the same way.
+        """
+        if side != OrderSide.BUY:
+            return
+        if (
+            order_type == OrderType.LIMIT
+            and limit_price is not None
+            and limit_price < quote.ask
+        ):
+            ref_price = limit_price  # resting limit
+        elif order_type in (OrderType.STOP, OrderType.STOP_LIMIT):
+            ref_price = stop_price if stop_price is not None else quote.ask
+        else:
+            ref_price = quote.ask  # market or crossing limit
+        if account.cash_balance < quantity * ref_price:
+            raise OrderRejected(
+                "insufficient_buying_power", "Not enough cash for this order"
+            )
+
+    def _quote_age_seconds(self, quote: Quote, now: float | None = None) -> float | None:
+        """Age of the quote in seconds, or None when the source did not stamp it.
+
+        ``Quote.ts_event`` defaults to 0 and only some providers set it; 0 or a
+        negative value means "unknown", and unknown is never treated as stale —
+        doing so would reject every provider that does not stamp a timestamp.
+        """
+        if quote.ts_event is None or quote.ts_event <= 0:
+            return None
+        return (time.time() if now is None else now) - quote.ts_event
+
+    def _is_stale_quote(self, quote: Quote) -> bool:
+        age = self._quote_age_seconds(quote)
+        return age is not None and age > self.max_quote_age_seconds
+
+    def _require_fresh_quote(self, symbol: str, quote: Quote) -> None:
+        age = self._quote_age_seconds(quote)
+        if age is not None and age > self.max_quote_age_seconds:
+            raise OrderRejected(
+                "stale_quote",
+                f"Quote for '{symbol}' is {age / 86400:.1f} days old "
+                f"(max {self.max_quote_age_seconds / 86400:.1f}); refusing to trade",
+            )
+
     async def evaluate_open_stops(
         self,
         session: AsyncSession,
@@ -231,8 +297,15 @@ class PaperExecutionService:
         Called whenever a new quote arrives for a symbol (order placement on
         that symbol, a run tick, or a realtime quote broadcast). A triggered
         STOP fills at its stop price through the same ledger path as any other
-        fill — buying-power/position checks still apply at trigger time and a
-        failure records REJECTED (no "triggered implies filled" illusion).
+        fill, so it inherits the same constraints as a freshly placed order:
+
+        - a stale quote is skipped (an old price must not trigger a stop);
+        - buys are re-checked against the cash actually available at trigger
+          time, at the price the trigger would fill at;
+        - sells are bounded by the quantity actually held (``_apply_fill``).
+
+        A trigger that fails a check is recorded REJECTED with the reason —
+        never "triggered implies filled".
         """
         from datetime import datetime, timezone
 
@@ -255,6 +328,8 @@ class PaperExecutionService:
             quote = await self.provider.get_quote(order.symbol)
             if quote is None:
                 continue  # no fresh quote: nothing to evaluate against
+            if self._is_stale_quote(quote):
+                continue  # an old price must not trigger (see MAX_QUOTE_AGE_SECONDS)
             result = self.fill_engine.compute_fill(
                 quote,
                 order.side,
@@ -271,11 +346,27 @@ class PaperExecutionService:
                 # crossed. Either way the trigger moment is now.
                 order.triggered_at = datetime.now(timezone.utc)
             if result.fills:
-                for price, qty in result.fills:
-                    await self._apply_fill(
-                        session, account, order, order.instrument_id,
-                        order.symbol, order.side, qty, price,
+                try:
+                    # The cash a stop was placed against may be gone by the time
+                    # it triggers; the same check as placement, at trigger price.
+                    self._check_buying_power(
+                        account, order.side, order.order_type, order.quantity,
+                        order.limit_price, order.stop_price, quote,
                     )
+                    for price, qty in result.fills:
+                        await self._apply_fill(
+                            session, account, order, order.instrument_id,
+                            order.symbol, order.side, qty, price,
+                        )
+                except OrderRejected as exc:
+                    # The trigger is real but unfillable: record why, keep the
+                    # ledger untouched beyond the failure (single-fill engine).
+                    order.status = OrderStatus.REJECTED
+                    order.reject_reason = f"{exc.code}: {exc.message}"
+                    order.filled_quantity = Decimal("0")
+                    order.avg_fill_price = None
+                    await session.flush()
+                    continue
                 order.filled_quantity = result.filled_quantity
                 order.avg_fill_price = result.avg_fill_price
                 order.status = (
@@ -315,6 +406,17 @@ class PaperExecutionService:
         price: Decimal,
     ) -> None:
         position = await PositionRepository(session).get(account.id, instrument_id)
+        # Nothing is sold that is not held: paper trading is cash-only and
+        # long-only, so a sell is always a reduction of an existing position.
+        # Enforced here (the single ledger entry point) so every caller — order
+        # placement and stop triggers alike — inherits the bound.
+        if side == OrderSide.SELL:
+            held = position.quantity if position is not None else Decimal("0")
+            if qty > held:
+                raise OrderRejected(
+                    "insufficient_position",
+                    f"Cannot sell {qty} {symbol}: only {held} held",
+                )
         if position is None:
             position = Position(
                 account_id=account.id,

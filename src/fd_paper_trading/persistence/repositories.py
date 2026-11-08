@@ -163,6 +163,24 @@ class OrderRepository:
         )
         return res.scalar_one_or_none()
 
+    async def get_by_client_order_id(
+        self, account_id: uuid.UUID, client_order_id: str
+    ) -> Order | None:
+        """The order already placed under this idempotency key, if any.
+
+        Scoped to the account: the same client key may be reused by a different
+        account (a caller's key space, not a global one).
+        """
+        res = await self.session.execute(
+            select(Order)
+            .where(
+                Order.account_id == account_id,
+                Order.client_order_id == client_order_id,
+            )
+            .options(selectinload(Order.fills))
+        )
+        return res.scalar_one_or_none()
+
     async def list_for_account(
         self,
         account_id: uuid.UUID,

@@ -35,6 +35,8 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Mapping, Sequence
 
+from sqlalchemy import or_, update
+
 from ..execution import OrderRejected, PaperExecutionService
 from ..marketdata import MarketDataProvider
 from ..persistence.models import (
@@ -55,6 +57,7 @@ from ..persistence.repositories import (
     StrategyRunRepository,
     UserRepository,
 )
+from ..valuation import marked_equity
 from .backtester import BarEvaluator, EvaluationError, build_evaluator
 from .ctx import StrategyContext, SymbolSeries, WeightContext
 from .risk_overlay import (
@@ -312,6 +315,13 @@ class PaperRunSupervisor:
         # Weight-track code sources: one ``target_weights`` evaluator per run,
         # built once so a sandbox spec is not re-parsed on every rebalance.
         self._weight_evaluators: dict[uuid.UUID, object] = {}
+        # Identifies this process in the run lease. Two supervisors in one
+        # process (tests, or a restart in place) still count as one writer.
+        self.owner = uuid.uuid4().hex
+        # Lease lifetime: long enough to cover a slow tick (bar fetch + evaluation
+        # + orders), short enough that a crashed pod hands over within a poll or
+        # two. Never allowed below a few polls, so a slow tick cannot lose it.
+        self.lease_seconds = max(3 * self.poll_seconds, 60.0)
 
     # ---- management (called by routes / lifespan) ----
 
@@ -455,6 +465,8 @@ class PaperRunSupervisor:
                     pass  # already terminal; nothing to cancel
             run.status = StrategyRunStatus.STOPPED
             run.stopped_at = datetime.now(UTC)
+            run.runner_owner = None
+            run.runner_lease_until = None
             await self._event(
                 session, run, await self._user_id(session, run),
                 StrategyEventType.STATE_CHANGE, "run stopped",
@@ -470,6 +482,8 @@ class PaperRunSupervisor:
             run.status = StrategyRunStatus.ERROR
             run.stopped_at = datetime.now(UTC)
             run.error = str(exc)
+            run.runner_owner = None
+            run.runner_lease_until = None
             await self._event(
                 session, run, await self._user_id(session, run),
                 StrategyEventType.ERROR, "run crashed", {"error": str(exc)},
@@ -484,9 +498,41 @@ class PaperRunSupervisor:
     # ---- one poll ----
 
     async def _tick(self, run_id: uuid.UUID) -> None:
+        # Single-writer gate. Two pods overlap during a rolling update; without
+        # this both would evaluate the same bars and place the same orders, and
+        # the "already processed" guard cannot help — it is written after the
+        # orders go in. Not claimed = another process owns the run right now, so
+        # this poll is a no-op (not an error: it is the expected case).
+        if not await self._claim_lease(run_id):
+            return
         # Routine failures (bar fetch, evaluation) are caught inside _tick_once
         # and logged; anything escaping here is a run bug -> ERROR via the loop.
         await self._tick_once(run_id)
+
+    async def _claim_lease(self, run_id: uuid.UUID) -> bool:
+        """Take or renew this process's lease on the run; False if someone else holds it.
+
+        One conditional UPDATE, so it is atomic on both SQLite and Postgres and
+        needs no advisory-lock branch: the row is updated only while the lease is
+        free, expired, or already ours. ``rowcount`` is the arbiter.
+        """
+        until = datetime.now(UTC) + timedelta(seconds=self.lease_seconds)
+        async with self.app.state.db.session_factory() as session:
+            result = await session.execute(
+                update(StrategyRun)
+                .where(
+                    StrategyRun.id == run_id,
+                    or_(
+                        StrategyRun.runner_owner.is_(None),
+                        StrategyRun.runner_owner == self.owner,
+                        StrategyRun.runner_lease_until.is_(None),
+                        StrategyRun.runner_lease_until < datetime.now(UTC),
+                    ),
+                )
+                .values(runner_owner=self.owner, runner_lease_until=until)
+            )
+            await session.commit()
+            return result.rowcount == 1
 
     async def _tick_once(self, run_id: uuid.UUID) -> None:
         """Fetch bars, detect a new bar, evaluate, place signals, snapshot.
@@ -655,6 +701,16 @@ class PaperRunSupervisor:
                 placed = await self._place_signals(
                     session, run, strategy, spec.symbol, account, ctx,
                     user, placed,
+                )
+                # The bar's orders moved the position (and cash). Re-read it so
+                # the risk overlay and the next catch-up bar see the ledger as
+                # it now is, not the quantity read before the loop started —
+                # otherwise several missed bars trade against a stale holding.
+                position = await PositionRepository(session).get(
+                    account.id, instrument_id
+                )
+                position_qty = (
+                    position.quantity if position is not None else Decimal("0")
                 )
                 if risk_cfg.active:
                     run.params = {
@@ -1124,22 +1180,7 @@ class PaperRunSupervisor:
         account, bar_date,
     ) -> None:
         """Daily equity point: cash + all positions marked at latest close."""
-        cash = account.cash_balance
-        positions = await PositionRepository(session).list_for_account(
-            account.id, account.user_id
-        )
-        marked = cash
-        for pos in positions:
-            mark = None
-            try:
-                bars = await provider.get_bars(pos.symbol, "1d", 1)
-                if bars:
-                    mark = bars[-1].close
-            except Exception:
-                mark = None
-            if mark is None:
-                mark = pos.avg_price  # fallback: book value
-            marked += pos.quantity * mark
+        marked = await marked_equity(session, account, provider)
         points = await StrategyRunRepository(session).list_equity_points(run.id)
         if bar_date not in {p.date for p in points}:
             session.add(

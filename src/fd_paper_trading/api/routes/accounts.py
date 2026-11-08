@@ -57,7 +57,11 @@ async def get_account(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     account = await _get_owned_account(account_id, user.id, session)
-    return await AccountService(session, settings=request.app.state.settings).summary(account)
+    return await AccountService(
+        session,
+        settings=request.app.state.settings,
+        provider=request.app.state.market_data_provider,
+    ).summary(account)
 
 
 @router.post("/accounts/{account_id}/deposit", response_model=AccountOut)
