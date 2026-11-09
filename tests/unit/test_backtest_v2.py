@@ -504,3 +504,43 @@ async def test_benchmark_unavailable_does_not_affect_strategy_result():
     # 策略自身结果照常存在（主结果不被基准污染）
     assert result.stats["final_equity"] > 0
     assert result.stats["trade_count"] >= 0
+
+
+async def test_benchmark_available_yields_numeric_relative_metrics():
+    """change4 task 5.1（代码路径）：基准**可用**时，超额/跟踪误差/IR 三者必须有数值。
+
+    生产上此路径恒 null 是因为**分片库没有指数行**（数据问题，政策不写服务端）；
+    代码路径本身可以用一个返回指数 bar 的 provider 证伪——这正是"做之前是红的"
+    那条判据的正向一半：它必须能变绿，否则"当基准可用时出数"只是愿望。
+    """
+    from datetime import timedelta
+    from decimal import Decimal as D
+
+    from fd_paper_trading.marketdata.provider import Bar
+    from fd_paper_trading.strategy.benchmarks import fetch_benchmark, relative_metrics
+
+    d0 = date(2026, 6, 1)
+    # ts 必须是**真实 epoch 秒**：fetch_benchmark 会用 _bar_date(ts) 与窗口比对，
+    # 用 toordinal*86400 这类伪时间戳会落到窗口外，从而假报「no bar data」。
+    import calendar
+    idx_bars = [Bar(ts=calendar.timegm((d0 + timedelta(days=i)).timetuple()),
+                    open=D(100 + i), high=D(100 + i), low=D(100 + i),
+                    close=D(100 + i), volume=D(1)) for i in range(10)]
+
+    class _HasIndex:
+        async def get_bars(self, symbol, timeframe, days):
+            return idx_bars
+
+    bars, reason = await fetch_benchmark(_HasIndex(), "000300.SS",
+                                         date(2026, 6, 1), date(2026, 6, 10))
+    assert bars is not None and reason is None, f"基准可用却仍报缺：{reason}"
+    assert len(bars) == 10
+
+    # 策略序列与基准不同 → 三个相对指标都必须有数值
+    strat = [(d, D(100)) for d in [d0 + timedelta(days=i) for i in range(10)]]
+    bench = [(d0 + timedelta(days=i), D(100 + i)) for i in range(10)]
+    rel = relative_metrics(strat, bench)
+    assert rel["excess_return"] is not None
+    assert rel["tracking_error"] is not None
+    assert rel["information_ratio"] is not None
+    assert rel["aligned_points"] == 10
