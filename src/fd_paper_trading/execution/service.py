@@ -14,6 +14,7 @@ on the account, so read-modify-write on cash/positions cannot race.
 import time
 import uuid
 from collections import OrderedDict
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,8 +29,9 @@ from ..persistence.models import (
     OrderStatus,
     OrderType,
     Position,
+    group_config,
 )
-from ..persistence.repositories import OrderRepository, PositionRepository
+from ..persistence.repositories import OrderRepository, PositionRepository, UserRepository
 from .fill_engine import FillResult, SimFillEngine
 
 # How old a quote may be and still be traded against. Daily-close-derived quotes
@@ -137,6 +139,12 @@ class PaperExecutionService:
         if self.rate_limiter is not None and not self.rate_limiter.allow(account.id):
             raise OrderRejected("rate_limited", "Order rate limit exceeded")
 
+        # Group limits belong here, not in the strategy routes: the routes only
+        # guard strategy creation, so a direct POST /orders used to bypass both
+        # the symbol allowlist and the daily cap entirely — an operator who set
+        # them in the admin panel believed they bound.
+        await self._enforce_group_limits(session, account, symbol)
+
         instrument = self.provider.get_instrument(symbol)
         if instrument is None:
             raise OrderRejected("unknown_instrument", f"No instrument for symbol '{symbol}'")
@@ -226,6 +234,43 @@ class PaperExecutionService:
 
         await session.flush()
         return order
+
+    async def _enforce_group_limits(
+        self, session: AsyncSession, account: Account, symbol: str
+    ) -> None:
+        """Apply the user's group allowlist and daily order cap to one order.
+
+        Both are read from the group the account's owner belongs to. A user with
+        no group (or a group that sets neither) is unrestricted, which is the
+        documented default: ``allowed_symbols=None`` means "no allowlist".
+
+        The cap counts by account, not by run: an account has exactly one owner,
+        so this is the per-user-per-day figure the admin panel promises. Runs
+        are still free to place up to the cap between them.
+        """
+        user = await UserRepository(session).get_by_id(account.user_id)
+        if user is None:
+            return
+
+        allowed = group_config(user, "allowed_symbols")
+        if allowed is not None and symbol not in allowed:
+            raise OrderRejected(
+                "symbol_not_allowed",
+                f"Symbol {symbol} is not in your group's allowed symbols",
+            )
+
+        max_per_day = group_config(user, "max_orders_per_day")
+        if max_per_day is None:
+            return
+        day_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        placed_today = await OrderRepository(session).count_for_account(
+            account.id, day_start
+        )
+        if placed_today >= int(max_per_day):
+            raise OrderRejected(
+                "daily_order_cap",
+                f"Daily order cap of {max_per_day} reached for this account",
+            )
 
     @staticmethod
     def _check_buying_power(

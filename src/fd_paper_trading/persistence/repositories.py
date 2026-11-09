@@ -199,6 +199,21 @@ class OrderRepository:
         res = await self.session.execute(stmt)
         return list(res.scalars().all())
 
+    async def count_for_account(self, account_id: uuid.UUID, since: datetime) -> int:
+        """Orders placed on ``account_id`` since ``since``.
+
+        The daily cap is a *user* constraint, and an account belongs to exactly
+        one user, so counting by account is counting by user without a join.
+        Counting per run (the old behaviour) let a user with three runs place
+        three times the cap.
+        """
+        res = await self.session.execute(
+            select(Order.id).where(
+                Order.account_id == account_id, Order.created_at >= since
+            )
+        )
+        return len(res.all())
+
     async def count_for_run(self, run_id: uuid.UUID, since: datetime) -> int:
         """Orders placed by ``run_id`` since ``since`` (daily order cap)."""
         res = await self.session.execute(
