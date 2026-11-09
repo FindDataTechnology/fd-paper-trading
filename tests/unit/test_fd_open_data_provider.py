@@ -422,3 +422,35 @@ def test_coverage_fillable_concept_still_goes_through_fill_gaps(provider):
     mock_fill.assert_called_once()
     assert out["closes"] == [("2026-08-28", Decimal("10.0"))]
     assert out["fingerprint"] == "abc"
+
+
+# ---- coverage gate: 上游不可用时必须 fail closed（defensive, 2026-11-09）----
+
+
+def test_coverage_never_claims_complete_when_upstream_unavailable(provider):
+    """上游取不到时，整个窗口必须留在 missing —— 不能凭空报"完整"。
+
+    这条守的是 R8 的反面：一份无法自证完整的结果，绝不能以"完整"的形状返回。
+    门若把"没读到"当成"没问题"，回测会拿半份数据算出确定结论。
+    """
+    concept = MagicMock(id=7, code="nav.unit")  # 非 fillable：走"判断而非补数"分支
+    entity = MagicMock(id=42)
+    session = _session_returning(concept, entity)
+
+    def _upstream_down(*_a, **_kw):
+        raise RuntimeError("upstream unavailable")
+
+    with (
+        patch.object(mod, "get_database") as mock_db,
+        patch.object(mod, "read_cache_range", return_value=[]),
+        patch("fd_open_data_mcp.fetch.gapfill.series_dates", return_value=[]),
+        patch("fd_open_data_mcp.fetch.gapfill.probe_interval", side_effect=_upstream_down),
+        patch("fd_open_data_mcp.fetch.gapfill.record_empty_interval") as mock_record,
+    ):
+        mock_db.return_value.get_session.return_value = session
+        out = provider._coverage_sync("007355", "2026-08-28", "2026-09-16")
+
+    assert out["closes"] == []
+    assert out["missing"], "取不到数据 = 整窗缺失，不许报完整"
+    assert out["market_closed"] == [], "未经证明的空区间不得冒充休市"
+    mock_record.assert_not_called()  # 取不到不等于证明为空
