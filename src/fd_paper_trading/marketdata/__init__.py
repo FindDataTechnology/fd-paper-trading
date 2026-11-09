@@ -56,33 +56,40 @@ def __getattr__(name: str):
         from .astock import AstockMarketDataProvider
 
         def build_market_data_provider(settings: Settings) -> MarketDataProvider:
-            """Select a market-data provider from ``settings``.
+            """Select a market-data provider through the source registry.
 
-            ``fd-open-data`` -> ``FdOpenDataMarketDataProvider``; ``polygon``
-            (with an API key) -> ``PolygonMarketDataProvider``; ``astock``
-            (with a read-only DSN, else a startup error) ->
-            ``AstockMarketDataProvider``; any other value (including
-            ``simulated`` and unset/unknown) ->
-            ``SimulatedMarketDataProvider``. This is the single home for the
-            fallthrough rule in the ``market-data`` spec.
+            Selection logic and the whole deprecation window live in
+            ``selection.py``: the registry says which *access protocol* a source
+            uses, and this function maps that protocol onto a provider class.
+            No source name appears here (change task 3.3) — swapping a source is
+            a declarations edit, not a code edit.
             """
-            if settings.market_data_provider == "fd-open-data":
-                return FdOpenDataMarketDataProvider()
-            if settings.market_data_provider == "polygon":
-                return PolygonMarketDataProvider(api_key=settings.market_data_api_key)
-            if settings.market_data_provider == "astock":
-                if not settings.astock_dsn:
-                    raise RuntimeError(
-                        "MARKET_DATA_PROVIDER=astock requires ASTOCK_DSN "
-                        "(read-only federated-view DSN); refusing to fall "
-                        "through to another provider"
-                    )
+            from .selection import (
+                PROVIDER_FD_OPEN_DATA,
+                PROVIDER_FEDERATED,
+                PROVIDER_POLYGON,
+                PROVIDER_SIMULATED,
+                SourceSelectionError,
+                resolve_selection,
+            )
+
+            sel = resolve_selection(settings)
+
+            if sel.provider == PROVIDER_FEDERATED:
                 return AstockMarketDataProvider(
-                    dsn=settings.astock_dsn,
-                    source=settings.astock_source,
-                    calendar_refs=settings.astock_calendar_refs,
+                    dsn=sel.dsn,
+                    source=sel.pinned_source,
+                    calendar_refs=sel.calendar_refs or settings.astock_calendar_refs,
                 )
-            return SimulatedMarketDataProvider()
+            if sel.provider == PROVIDER_FD_OPEN_DATA:
+                return FdOpenDataMarketDataProvider()
+            if sel.provider == PROVIDER_POLYGON:
+                return PolygonMarketDataProvider(api_key=settings.market_data_api_key)
+            if sel.provider == PROVIDER_SIMULATED:
+                return SimulatedMarketDataProvider()
+            raise SourceSelectionError(
+                f"selection produced unknown provider {sel.provider!r}"
+            )
 
         globals()[name] = build_market_data_provider
         return build_market_data_provider

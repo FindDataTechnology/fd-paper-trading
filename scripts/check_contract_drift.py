@@ -48,8 +48,15 @@ PIN_FILE = VENDOR_DIR / "VENDOR.json"
 VENDORED_FILES = {
     "fd_quant/contracts/models.py": "fd_quant/contracts/models.py",
     "fd_quant/contracts/unsourced.py": "fd_quant/contracts/unsourced.py",
+    # add-investment-trading-fleet: 组合风控的**纯判定**（回测/纸面运行/执行闸三处共用）。
+    # 镜像的是判定本身；MCP 外壳（risk_tools.py）留在 fd-quant，不随包走。
+    "fd_quant/risk.py": "fd_quant/risk.py",
     "schemas/rating.schema.json": "schemas/rating.schema.json",
     "schemas/target-weights.schema.json": "schemas/target-weights.schema.json",
+    # add-price-supply-and-caliber: 价格序列出处引用
+    "schemas/price-series-ref.schema.json": "schemas/price-series-ref.schema.json",
+    # add-portfolio-intent-contract: 评级→权重的派生契约
+    "schemas/portfolio-intent.schema.json": "schemas/portfolio-intent.schema.json",
 }
 
 #: Hand-written glue under the vendor dir — pinned as a listing so the mirror is
@@ -59,7 +66,13 @@ VENDORED_FILES = {
 LOCAL_FILES = ["README.md", "fd_quant/__init__.py", "fd_quant/contracts/__init__.py"]
 
 #: Schema files ``load_schema`` must be able to find, keyed by contract kind.
-SCHEMA_FILES = {"rating": "rating.schema.json", "target_weights": "target-weights.schema.json"}
+SCHEMA_FILES = {
+    "rating": "rating.schema.json",
+    "target_weights": "target-weights.schema.json",
+    # add-price-supply-and-caliber: 价格序列出处引用（三路同源断言的载体）
+    "price_series_ref": "price-series-ref.schema.json",
+    "portfolio_intent": "portfolio-intent.schema.json",
+}
 
 #: Symbols the engine relies on. A rename upstream must break this gate, not
 #: surface later as an ImportError at runtime.
@@ -71,7 +84,28 @@ REQUIRED_API = (
     "check_target_weights",
     "validate",
     "validate_target_weights",
+    # add-price-supply-and-caliber: 价格序列引用必须可被引擎消费方按名取到
+    "PriceSeriesRef",
+    "check_price_series_ref",
+    "validate_price_series_ref",
+    # add-portfolio-intent-contract
+    "PortfolioIntent",
+    "check_portfolio_intent",
+    "validate_portfolio_intent",
 )
+
+#: 按文件分列的必存符号。原先只有 models.py 一份清单，加镜像件时容易混淆——
+#: 一个符号在 A 文件里、却写进 B 文件的清单，闸会一直红且看不出为什么。
+REQUIRED_API_BY_FILE: dict[str, tuple[str, ...]] = {
+    "fd_quant/contracts/models.py": REQUIRED_API,
+    # 组合风控的纯判定（回测 / 纸面运行 / 执行闸三处共用）。
+    "fd_quant/risk.py": (
+        "evaluate_portfolio_gate",
+        "THRESHOLD_KEYS",
+        "Thresholds",
+        "RiskGateError",
+    ),
+}
 
 #: The engine spec (strategy-management delta) pins the float tolerance at 1e-9;
 #: a change there silently loosens engine-side validation, so gate it here.
@@ -159,12 +193,18 @@ _GLUE_INITS = {
         "    ContractError,\n"
         "    Evidence,\n"
         "    Producer,\n"
+        "    PortfolioIntent,\n"
+        "    PriceSeriesRef,\n"
         "    Rating,\n"
         "    TargetWeights,\n"
+        "    check_portfolio_intent,\n"
+        "    check_price_series_ref,\n"
         "    check_rating,\n"
         "    check_target_weights,\n"
         "    load_schema,\n"
         "    validate,\n"
+        "    validate_portfolio_intent,\n"
+        "    validate_price_series_ref,\n"
         "    validate_rating,\n"
         "    validate_target_weights,\n"
         ")\n"
@@ -193,12 +233,18 @@ _GLUE_INITS = {
         "    ContractError,\n"
         "    Evidence,\n"
         "    Producer,\n"
+        "    PortfolioIntent,\n"
+        "    PriceSeriesRef,\n"
         "    Rating,\n"
         "    TargetWeights,\n"
+        "    check_portfolio_intent,\n"
+        "    check_price_series_ref,\n"
         "    check_rating,\n"
         "    check_target_weights,\n"
         "    load_schema,\n"
         "    validate,\n"
+        "    validate_portfolio_intent,\n"
+        "    validate_price_series_ref,\n"
         "    validate_rating,\n"
         "    validate_target_weights,\n"
         ")\n"
@@ -303,12 +349,19 @@ def check(vendor_dir: Path, fd_quant: Path | None, quiet: bool = False) -> list[
 
     models = vendor_dir / "fd_quant" / "contracts" / "models.py"
     if models.is_file():
-        names, tolerance = _module_api(models)
-        missing = [s for s in REQUIRED_API if s not in names]
-        if missing:
-            problems.append(
-                "vendored contract lost required API: " + ", ".join(missing)
-            )
+        # models.py 的浮点容差另有单独判据（见下），先取回来
+        _names, tolerance = _module_api(models)
+        for rel, required in REQUIRED_API_BY_FILE.items():
+            target = vendor_dir / rel
+            if not target.is_file():
+                problems.append(f"missing vendored file: {rel} (run --sync)")
+                continue
+            names, _tol = _module_api(target)
+            missing = [sym for sym in required if sym not in names]
+            if missing:
+                problems.append(
+                    f"vendored {rel} lost required API: " + ", ".join(missing)
+                )
         if tolerance is None:
             problems.append("WEIGHT_SUM_TOLERANCE not found in vendored contract")
         elif abs(tolerance - REQUIRED_TOLERANCE) > 0:

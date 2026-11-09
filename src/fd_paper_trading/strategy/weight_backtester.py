@@ -116,6 +116,9 @@ class WeightBacktestResult:
     universe: list[str]
     #: Every (date, symbol) pair valued from a stale close, for the run record.
     data_gaps: list[dict]
+    #: 组合级风控闸在每次调仓点的判定（未配置阈值时为空数组）。
+    #: 只记录**触达了什么**，不改回测语义——处置由调用方决定（design: 判定与处置分离）。
+    risk_events: list[dict] = field(default_factory=list)
 
 
 class WeightSource:
@@ -253,6 +256,8 @@ def replay_weights(
     initial_cash: Decimal,
     *,
     evaluate_code: Callable[[WeightContext], Mapping[str, float]] | None = None,
+    risk_thresholds: Mapping[str, Any] | None = None,
+    risk_sectors: Mapping[str, str] | None = None,
 ) -> WeightBacktestResult:
     """Replay a universe, rebalancing every ``every_n_bars`` trading dates.
 
@@ -262,6 +267,8 @@ def replay_weights(
     not five days off a calendar that includes weekends.
     """
     universe = list(spec.universe)
+    # 组合级风控闸的记录位。未配置阈值时保持空数组——零行为变化。
+    risk_events: list[dict] = []
     axis = sorted(
         {
             _bar_date(b)
@@ -334,6 +341,23 @@ def replay_weights(
             # evidence of what the engine actually holds, which is exactly where
             # rounding and scale-downs make it differ from the target (D7).
             snapshot.actual_weights = portfolio.weights(marks)
+            # 组合级风控：判**实际持仓**（不是目标权重）——两者在取整与缩量后会不同，
+            # 而风险敞口由实际持仓决定。未配置阈值时跳过，不改变任何既有行为。
+            if risk_thresholds is not None:
+                from .._vendor.fd_quant.risk import evaluate_portfolio_gate
+
+                risk_events.append({
+                    "day": day.isoformat(),
+                    "verdict": evaluate_portfolio_gate(
+                        weights=snapshot.actual_weights,
+                        thresholds=risk_thresholds,
+                        sectors=risk_sectors,
+                        equity_series=[(d.isoformat(), float(v)) for d, v in curve] + [
+                            (day.isoformat(), float(equity_after))
+                        ] if (equity_after := portfolio.equity(marks)) else None,
+                        as_of=day.isoformat(),
+                    ),
+                })
             snapshots.append(snapshot)
 
         equity = portfolio.equity(marks)
@@ -348,6 +372,7 @@ def replay_weights(
         snapshots=snapshots,
         universe=universe,
         data_gaps=gaps,
+        risk_events=risk_events,
     )
 
 

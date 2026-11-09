@@ -4,7 +4,7 @@
   "upstream_package": "fd-quant",
   "upstream_version": "0.1.0",
   "upstream_paths_hint": "fd-quant/{fd_quant/contracts/models.py,schemas/*.json}",
-  "pinned_at": "2026-10-17",
+  "pinned_at": "2026-11-10",
   "required_api": [
     "SUPPORTED_SCHEMA_VERSION",
     "WEIGHT_SUM_TOLERANCE",
@@ -12,7 +12,15 @@
     "TargetWeights",
     "check_target_weights",
     "validate",
-    "validate_target_weights"
+    "validate_target_weights",
+    "PriceSeriesRef",
+    "check_price_series_ref",
+    "validate_price_series_ref",
+    "PortfolioIntent",
+    "check_portfolio_intent",
+    "validate_portfolio_intent",
+    "evaluate_portfolio_gate",
+    "THRESHOLD_KEYS"
   ],
   "required_weight_sum_tolerance": 1e-09,
   "local_files_not_vendored": [
@@ -24,14 +32,20 @@
     {
       "vendored": "fd_quant/contracts/models.py",
       "upstream": "fd_quant/contracts/models.py",
-      "bytes": 21527,
-      "sha256": "d52840562e1071eac293b9c6b5477544ae1bc511c07bcc8634ad4dedbec125c6"
+      "bytes": 47138,
+      "sha256": "4f713bb7fe6883925ce77429806bf92d5d5759e7e54694b34c1e1658108888ce"
     },
     {
       "vendored": "fd_quant/contracts/unsourced.py",
       "upstream": "fd_quant/contracts/unsourced.py",
       "bytes": 1378,
       "sha256": "3956272384037db3ae7aeb5a9a223517359b9f2a38a88bfd2d08a01666aabb63"
+    },
+    {
+      "vendored": "fd_quant/risk.py",
+      "upstream": "fd_quant/risk.py",
+      "bytes": 10978,
+      "sha256": "adecb85c2dc2b55ba033ce1213f07602b4b40cc6b88f22973b9066267380ac19"
     },
     {
       "vendored": "schemas/rating.schema.json",
@@ -44,6 +58,18 @@
       "upstream": "schemas/target-weights.schema.json",
       "bytes": 3568,
       "sha256": "e80165c3cfb90655f8887ade766652a1fd8d06e3444460bb5c3bc143d62e02fb"
+    },
+    {
+      "vendored": "schemas/price-series-ref.schema.json",
+      "upstream": "schemas/price-series-ref.schema.json",
+      "bytes": 3037,
+      "sha256": "48fa90b499ddace82ce3aa14e20bef6dd238880a4f71332acbedda1777add2c3"
+    },
+    {
+      "vendored": "schemas/portfolio-intent.schema.json",
+      "upstream": "schemas/portfolio-intent.schema.json",
+      "bytes": 4751,
+      "sha256": "5eeebf47b1d9e4138aeeb8d9b9184dc41564400997624a93ef43fd99878ee382"
     }
   ]
 }

@@ -91,6 +91,8 @@ def _recent(days_ago: int) -> str:
 
 
 def _provider(reader=None, **kw):
+    # the provider no longer defaults its pinned source (task 3.3); tests name it
+    kw.setdefault("source", "astock_daily")
     return AstockMarketDataProvider(fetcher=reader or FakeReader(), **kw)
 
 

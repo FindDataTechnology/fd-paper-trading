@@ -71,7 +71,11 @@ _SYMBOL_RE = re.compile(r"^(?P<code>\d{6})(?:\.(?P<venue>SH|SS|SZ|SHE))?$", re.I
 
 _ADJUSTED = "forward"
 
-DEFAULT_ASTOCK_SOURCE = "astock_daily"
+# The pinned ``source_used`` is NOT defaulted here any more: the source arrives
+# from the price-source registry (fd-open-data-mcp ``price_sources``) via
+# ``marketdata.selection``, so the provider no longer holds a copy of a source
+# name. A provider constructed without a source is a programming error, not a
+# default (add-price-supply-and-caliber task 3.3).
 
 # Trading-calendar probe: a small basket of dense, full-history blue chips in
 # the SAME pinned source. A market-wide calendar scan over the federated view
@@ -120,9 +124,15 @@ class AstockMarketDataProvider(MarketDataProvider):
         self,
         dsn: str = "",
         fetcher=None,
-        source: str = DEFAULT_ASTOCK_SOURCE,
+        source: str | None = None,
         calendar_refs: str = DEFAULT_CALENDAR_REFS,
     ):
+        if not source:
+            raise ValueError(
+                "astock provider requires an explicit pinned source (resolved "
+                "from the price-source registry); it holds no default source "
+                "name"
+            )
         if fetcher is None:
             if not dsn:
                 raise ValueError(

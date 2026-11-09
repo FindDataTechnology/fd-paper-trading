@@ -470,3 +470,37 @@ async def test_measure_from_baseline_excludes_the_training_gain():
     # 横盘段无新成交且价格不变 → 测试段收益应为 0，而不是训练段的翻倍收益
     assert r.stats["total_return"] == 0.0
     assert len(r.equity_points) == 10, "only the measured window gets equity points"
+
+
+async def test_benchmark_unavailable_does_not_affect_strategy_result():
+    """change4 task 5.2（降级语义保持不变）：基准不可得时，
+    ① fetch_benchmark 不抛异常、返回 available:false 形态；
+    ② 策略自身的回测照常完成（相对指标缺位不污染主结果）。"""
+    from datetime import timedelta
+    from decimal import Decimal as D
+
+    from fd_paper_trading.marketdata.provider import Bar
+    from fd_paper_trading.strategy.spec import Rebalance, WeightSpec
+    from fd_paper_trading.strategy.weight_backtester import replay_weights
+
+    class _Raising:
+        async def get_bars(self, symbol, timeframe, days):
+            raise RuntimeError("benchmark feed down")
+
+    bars_a = [Bar(ts=int((date(2026, 6, 1) + timedelta(days=i)).toordinal() * 86400),
+                  open=D(10), high=D(10), low=D(10), close=D(10), volume=D(1))
+              for i in range(4)]
+    spec = WeightSpec(kind="weight", universe=["A"],
+                      rebalance=Rebalance(every_n_bars=4),
+                      weights_series={"2026-06-01": {"A": 0.5}})
+    result = replay_weights(spec, {"A": bars_a}, Decimal("100000"))
+
+    # 基准源整个挂掉：fetch 层不抛
+    from fd_paper_trading.strategy.benchmarks import fetch_benchmark
+    bars, reason = await fetch_benchmark(_Raising(), "000300.SS",
+                                         date(2026, 6, 1), date(2026, 6, 4))
+    assert bars is None and reason  # 降级为 available:false 形态
+
+    # 策略自身结果照常存在（主结果不被基准污染）
+    assert result.stats["final_equity"] > 0
+    assert result.stats["trade_count"] >= 0

@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     account_currency: str = "USD"
 
     # ---- Market data / execution ----
+    # MARKET_DATA_SOURCE_ID is the registry id from fd-open-data-mcp's
+    # price_sources declarations; it takes precedence over the legacy
+    # MARKET_DATA_PROVIDER below. An unregistered id is a startup error, never a
+    # silent fallback (add-price-supply-and-caliber task 3.1).
+    market_data_source_id: str = ""
+    # Legacy selector: kept for one version behind a deprecation warning, then
+    # removed (tasks 3.2 / 6.4). It maps onto a registry id where one exists.
     market_data_provider: str = "simulated"
     market_data_api_key: str = ""
     per_user_symbol_limit: int = 20
@@ -53,9 +60,10 @@ class Settings(BaseSettings):
     # without a DSN is a startup error, never a silent fallback
     # (service-deployment: 凭据经部署环境注入；未配置选它即明确失败).
     astock_dsn: str = ""
-    # The pinned source family inside the federated view: the curated
-    # forward-adjusted A-share daily rows (design D1). One series, one source.
-    astock_source: str = "astock_daily"
+    # Deprecated and unused: the pinned source now comes from the registry
+    # (MARKET_DATA_SOURCE_ID). Kept as an empty field so existing deployment
+    # manifests that still set ASTOCK_SOURCE keep parsing; removed in task 6.4.
+    astock_source: str = ""
     # Reference basket whose trading days ARE the market calendar (a weekday
     # where most of these did not trade is a proven holiday; a weekday where
     # they traded but the symbol did not is a symbol-level hole). Blue chips

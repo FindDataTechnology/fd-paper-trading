@@ -59,3 +59,14 @@ filterwarnings = []
 
 [tool.uv]
 package = true
+
+# 镜像层的非 .py 文件必须**显式**声明，不靠 VCS 追踪。
+#
+# 实测过的失败形态（fd-open-data-mcp）：setuptools 的 include-package-data 默认只收
+# **被 git 追踪**的文件，于是新建但未提交的 declarations.yaml 被静默丢出 wheel——
+# 本机 editable 安装读源码树完全看不出，装到干净环境才 FileNotFoundError。
+# 这里把 _vendor 下的 schema / 契约钉成显式声明，让"文件在不在仓库里"不影响
+# "文件在不在包里"。VENDOR.json 与 README 只是为了镜像自解释，一并带上。
+[tool.setuptools.package-data]
+"fd_paper_trading._vendor" = ["VENDOR.json", "README.md"]
+"fd_paper_trading._vendor.schemas" = ["*.schema.json"]
