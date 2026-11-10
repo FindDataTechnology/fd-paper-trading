@@ -398,3 +398,64 @@ def test_source_watermark_passes_through_the_registry_answer(monkeypatch):
     assert got["source_id"] == "astock_daily"
     assert got["as_of"] == "2026-07-10"
     assert got["status"] == "ok"
+
+
+# ------------------------------------------------------- 序列出处 ref（task 4.3）
+
+
+class _Decl:
+    """最小声明替身：只带 ref 需要的三个字段。"""
+
+    adjustment = "qfq"
+    adjustment_anchor = "2026-07-10"
+    db_source = "astock_daily"
+
+
+@pytest.mark.asyncio
+async def test_coverage_attaches_a_series_ref_when_the_source_is_registered():
+    """有注册表 id + 声明 → 覆盖结果里带一个能过契约校验的 ref。"""
+    from fd_paper_trading._vendor.fd_quant.contracts.models import (
+        check_price_series_ref,
+    )
+
+    rows = [_bar_row("2026-07-08", 37, 38, 36, 37.7),
+            _bar_row("2026-07-09", 37, 38, 36, 37.5)]
+    p = _provider(FakeReader(bars=rows), registry_source_id="astock_daily")
+    p._decl = _Decl()            # 直接注声明，避免测试依赖注册表文件
+    p._decl_loaded = True
+
+    out = await p.get_bars_with_coverage("600036", "2026-07-08", "2026-07-09")
+
+    ref = out["series_ref"]
+    assert "series_ref_unavailable" not in out
+    assert ref["source_id"] == "astock_daily"
+    assert ref["adjustment"] == "qfq"
+    assert ref["as_of_max"] == "2026-07-09"      # 窗口内最后一个交易日
+    assert ref["adjustment_anchor"] == "2026-07-10"
+    assert ref["row_count"] == 2
+    assert check_price_series_ref(ref) == []
+
+
+@pytest.mark.asyncio
+async def test_coverage_withholds_the_ref_without_a_registry_id():
+    """旧路径（无 MARKET_DATA_SOURCE_ID）→ 不出 ref，但**说明原因**。
+
+    这一条与 6.5 的水位同源：`source_id` 是注册表给的身份，没有它就造不出
+    可断言的出处。此时给原因而不是空对象，调用方才能区分"没能力"与"没数据"。
+    """
+    rows = [_bar_row("2026-07-08", 37, 38, 36, 37.7)]
+    p = _provider(FakeReader(bars=rows))     # 无 registry_source_id
+    out = await p.get_bars_with_coverage("600036", "2026-07-08", "2026-07-08")
+    assert "series_ref" not in out
+    assert out["series_ref_unavailable"] == "no_source_id"
+
+
+@pytest.mark.asyncio
+async def test_empty_window_explains_why_there_is_no_ref():
+    """空序列没有 as_of_max → 没有可断言的 ref，原因要写出来。"""
+    p = _provider(FakeReader(bars=[]), registry_source_id="astock_daily")
+    p._decl = _Decl()
+    p._decl_loaded = True
+    out = await p.get_bars_with_coverage("600036", "2026-07-08", "2026-07-09")
+    assert "series_ref" not in out
+    assert out["series_ref_unavailable"] == "no_as_of_max"

@@ -147,6 +147,10 @@ class AstockMarketDataProvider(MarketDataProvider):
         # 后者是联邦视图里钉住的 ``source_used``）。只有它能让本 provider 问到
         # 「这个源的水位到哪一天」——见 ``source_watermark``。
         self._registry_source_id = registry_source_id
+        # 源声明缓存：口径与锚点只该有一个真源（declarations.yaml），
+        # 不该在 provider 里另写一份常量。
+        self._decl_loaded = False
+        self._decl: object | None = None
         self._calendar_ref_codes = [
             c.strip() for c in (calendar_refs or "").split(",") if c.strip()
         ]
@@ -163,7 +167,6 @@ class AstockMarketDataProvider(MarketDataProvider):
 
     def source_watermark(self) -> dict | None:
         """本 provider 所钉源的实时水位（change1 task 6.5）。
-
         形状是 ``Watermark.to_dict()``：``{source_id, as_of, status, method,
         basket, lookback_days, detail}``。``as_of`` 为 ``None`` 时 ``status``
         说明原因（``no_data`` / ``unreachable``）。
@@ -190,6 +193,32 @@ class AstockMarketDataProvider(MarketDataProvider):
                 exc_info=True,
             )
             return None
+
+    def _declaration(self):
+        """本 provider 对应源的声明（缓存；拿不到返回 None）。
+
+        口径与锚点以 `declarations.yaml` 为唯一真源：本文件的 ``_ADJUSTED``
+        只是"没注册表时的已知事实"，不是可以与声明并存的第二份口径。
+        """
+        if self._decl_loaded:
+            return self._decl
+        self._decl_loaded = True
+        if not self._registry_source_id:
+            return None
+        try:
+            from fd_open_data_mcp.price_sources.registry import (  # type: ignore[import-not-found]
+                load_registry,
+            )
+
+            self._decl = load_registry().get(self._registry_source_id)
+        except Exception:  # noqa: BLE001 - 声明拿不到就不出 ref，不猜
+            logger.warning(
+                "declaration(%s) unavailable; series refs will be withheld",
+                self._registry_source_id,
+                exc_info=True,
+            )
+            self._decl = None
+        return self._decl
 
     # ---- concepts / entity resolution ----
 
@@ -306,6 +335,8 @@ class AstockMarketDataProvider(MarketDataProvider):
             "market_closed": [], "fill_failed": False,
             "fingerprint": "", "adjusted": "unknown",
             "source": self._source,
+            # 空序列没有 as_of_max，也就没有可断言的 ref：说明原因，不给空对象。
+            "series_ref_unavailable": "no_as_of_max",
         }
         entity = await self._resolve_entity(symbol)
         if entity is None:
@@ -368,7 +399,7 @@ class AstockMarketDataProvider(MarketDataProvider):
 
         from fd_open_data_mcp.fetch.gapfill import fingerprint as _fingerprint
 
-        return {
+        out = {
             "bars": bars,
             "closes": close_series,
             "missing": missing,
@@ -378,6 +409,40 @@ class AstockMarketDataProvider(MarketDataProvider):
             "adjusted": _ADJUSTED,
             "source": self._source,
         }
+        out.update(self._series_ref_facts(symbol, close_series, start_s, end_s))
+        return out
+
+    def _series_ref_facts(self, symbol: str, close_series, start_s: str,
+                          end_s: str) -> dict:
+        """附上 `PriceSeriesRef` 或"为什么没有"（change1 task 4.3）。
+
+        口径与锚点取自声明（唯一真源）；``as_of_max`` 取本窗口内最后一个交易日，
+        与水位同义——它就是"这批数据右端到哪天"。
+
+        出不来时给**原因**，不给空对象：``series_ref_unavailable`` 与
+        ``series_ref`` 恒不同时出现，调用方据此区分"没能力出"和"出了"。
+        """
+        from .series_ref import build_series_ref
+
+        decl = self._declaration()
+        adjusted = getattr(decl, "adjustment", None) if decl is not None else _ADJUSTED
+        ref, reason = build_series_ref(
+            source_id=self._registry_source_id,
+            symbol=symbol,
+            adjusted=adjusted,
+            # close_series 按日期升序，最后一个就是窗口内的水位
+            as_of_max=close_series[-1][0] if close_series else None,
+            window_start=start_s,
+            window_end=end_s,
+            row_count=len(close_series),
+            adjustment_anchor=(getattr(decl, "adjustment_anchor", None)
+                               if decl is not None else None),
+            db_source=(getattr(decl, "db_source", None) if decl is not None
+                       else self._source),
+        )
+        if ref is not None:
+            return {"series_ref": ref}
+        return {"series_ref_unavailable": reason}
 
     async def _query_bars(self, symbol: str, start_s: str, end_s: str, entity=None):
         """One pivot SQL per window: date-asc OHLCV bars from the pinned source."""

@@ -92,6 +92,9 @@ REQUIRED_API = (
     "PortfolioIntent",
     "check_portfolio_intent",
     "validate_portfolio_intent",
+    # add-price-supply-and-caliber 4.3：交易路要自己算出处指纹，这个函数被消费方
+    # 按名调用，掉出 API 面就是"回测落库少了 fingerprint"这类静默缺失。
+    "compute_price_series_fingerprint",
 )
 
 #: 按文件分列的必存符号。原先只有 models.py 一份清单，加镜像件时容易混淆——

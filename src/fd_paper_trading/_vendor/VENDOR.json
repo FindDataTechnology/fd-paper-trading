@@ -18,7 +18,8 @@
     "validate_price_series_ref",
     "PortfolioIntent",
     "check_portfolio_intent",
-    "validate_portfolio_intent"
+    "validate_portfolio_intent",
+    "compute_price_series_fingerprint"
   ],
   "required_weight_sum_tolerance": 1e-09,
   "local_files_not_vendored": [

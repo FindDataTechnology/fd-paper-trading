@@ -61,6 +61,7 @@ from ...strategy.benchmarks import (
 )
 from ...strategy.compute_plane import validate_no_lookahead as _validate_no_lookahead
 from ...strategy.templates import list_templates, weight_track_metadata
+from ..._vendor.fd_quant.contracts.models import check_price_series_ref
 from ..errors import APIError
 from ..schemas import (
     BacktestRequest,
@@ -336,7 +337,34 @@ def _coverage_params(symbol: str, coverage: dict | None) -> dict:
         params["adjusted"] = coverage["adjusted"]
     if coverage.get("source"):
         params["source"] = coverage["source"]
+    params.update(_series_ref_params(coverage))
     return params
+
+
+def _series_ref_params(coverage: dict) -> dict:
+    """把 provider 报的价格序列出处抬成 run 参数（change1 task 4.3）。
+
+    契约要求的四个字段（``source_id``/``adjustment``/``as_of_max``/``fingerprint``）
+    落到 ``price_series_ref``，回测结果因此能反查到"这批价格是哪天的哪一路"。
+
+    **两个键恒不同时出现**：出得来 → ``price_series_ref``；出不来 →
+    ``price_series_ref_unavailable``（原因）。「两个键都没有」是第三种状态——
+    provider 根本不产出 ref（simulated 等）。三者合并成"写个空的"就等于把
+    "没问过"伪装成"问过、没有"，而这一处恰好是"研报/回测/账本三个数字为什么
+    不可比"的唯一线索。
+    """
+    ref = coverage.get("series_ref")
+    if ref:
+        # 发之前再用契约自己的校验器验一遍：provider 造、路由验，两份实现才拦得住。
+        errors = check_price_series_ref(ref)
+        if errors:
+            return {"price_series_ref_unavailable":
+                    f"invalid:{errors[0].get('path', '?')}"}
+        return {"price_series_ref": ref}
+    reason = coverage.get("series_ref_unavailable")
+    if reason:
+        return {"price_series_ref_unavailable": reason}
+    return {}
 
 
 async def _replay_single_symbol(app, run, spec, start: date, end: date, costs=None,
