@@ -389,7 +389,8 @@ async def _replay_single_symbol(app, run, spec, start: date, end: date, costs=No
                         risk=risk)
 
 
-async def _replay_universe(app, spec, start: date, end: date, initial_cash: Decimal, costs=None):
+async def _replay_universe(app, spec, start: date, end: date, initial_cash: Decimal,
+                           costs=None, risk_thresholds=None, risk_sectors=None):
     """The weight path: date-aligned bars for the universe through the engine.
 
     One provider call per universe symbol, each filtered to the window, then the
@@ -436,6 +437,8 @@ async def _replay_universe(app, spec, start: date, end: date, initial_cash: Deci
         bars_by_symbol,
         initial_cash,
         evaluate_code=build_weight_evaluator(spec),
+        risk_thresholds=risk_thresholds,
+        risk_sectors=risk_sectors,
     ), coverage_record
 
 
@@ -631,9 +634,16 @@ async def _run_backtest(app, run_id: uuid.UUID) -> None:
                 )
             elif isinstance(spec, WeightSpec):
                 result, coverage_record = await _replay_universe(
-                    app, spec, start, end, initial_cash, cost_model
+                    app, spec, start, end, initial_cash, cost_model,
+                    risk_thresholds=(run.params or {}).get("risk_thresholds"),
+                    risk_sectors=(run.params or {}).get("risk_sectors"),
                 )
                 _record_weight_result(run, result)
+                if result.risk_events:
+                    # 判定随 run 留痕：触达了哪条判据、实际值多少。没有阈值时
+                    # risk_events 为空 → 键不出现（"没判过"≠"判过且通过"）。
+                    run.params = {**(run.params or {}),
+                                  "risk_events": result.risk_events}
                 # 覆盖度记录落在 params：指纹 + 每标的缺失/休市段数 + 是否检查。
                 run.params = {**(run.params or {}), "data_coverage": coverage_record}
                 session.add_all(
@@ -728,6 +738,13 @@ async def start_backtest(
         # recorded）。校验（范围）在 RiskConfig 构造时做。
         RiskConfig.from_dict(payload.risk.model_dump(mode="json"))
         params["risk"] = payload.risk.model_dump(mode="json")
+    if payload.risk_thresholds is not None:
+        # 快照而非引用：run 记录要能回答"这次用的是哪套阈值"，且事后改默认值
+        # 不能重写历史。缺席 = 闸不介入（零行为变化）。
+        params["risk_thresholds"] = {
+            k: float(v) for k, v in
+            payload.risk_thresholds.model_dump(exclude_none=True).items()
+        }
     if payload.benchmarks is not None:
         params["benchmarks"] = list(payload.benchmarks)
     if payload.walk_forward_enabled:

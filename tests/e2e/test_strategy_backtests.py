@@ -335,3 +335,98 @@ async def test_backtest_records_why_there_is_no_ref(client, auth_headers, app):
     assert done["status"] == "COMPLETED", done.get("error")
     assert "price_series_ref" not in done["params"]
     assert done["params"]["price_series_ref_unavailable"] == "caliber_unknown"
+
+
+# ---------------------------------------------------------------------------
+# 组合级风控闸的回测调用点（change4 3.1）
+#
+# 这一组测的是**调用点**，不是门的判据（判据在 fd-quant 有 38 条）。
+# 之前 `replay_weights` 有 `risk_thresholds` 形参却没有任何调用方传值，
+# 于是"回测里风控从不生效"这件事在全绿下无人发现——这三条就是那个洞的钉子。
+# ---------------------------------------------------------------------------
+
+WEIGHT_SPEC_RISK = {
+    "kind": "weight",
+    "universe": ["AAPL"],
+    "rebalance": {"every_n_bars": 1},
+    "weights_series": {"2026-01-01": {"AAPL": 1.0}},
+}
+
+
+def _risk_window() -> dict:
+    end = date.today()
+    start = end - timedelta(days=WINDOW_DAYS - 1)
+    return {"start": start.isoformat(), "end": end.isoformat(),
+            "initial_cash": "100000"}
+
+
+@pytest.mark.asyncio
+async def test_backtest_request_thresholds_reach_the_gate(client, auth_headers):
+    """请求里给阈值 → run.params 出现 risk_events，且判定来自共享实现。"""
+    headers = await auth_headers()
+    sid = await _make_strategy(client, headers, spec=WEIGHT_SPEC_RISK)
+    r = await client.post(
+        f"/api/v1/strategies/{sid}/backtests",
+        json={**_risk_window(),
+              "risk_thresholds": {"per_symbol_max": 0.5, "industry_max": 0.9,
+                                  "drawdown_max": 0.9, "daily_loss_max": 0.9}},
+        headers=headers,
+    )
+    assert r.status_code == 202, r.json()
+    done = await _wait_terminal_spaced(client, headers, r.json()["id"])
+    assert done["status"] == "COMPLETED", done.get("error")
+    events = done["params"]["risk_events"]
+    assert events, "配了阈值却没判定记录：调用点没把阈值传给门"
+    assert events[0]["verdict"]["status"] in ("ok", "breached", "unavailable")
+
+
+@pytest.mark.asyncio
+async def test_backtest_tight_threshold_actually_breaches(client, auth_headers):
+    """单票 100% 权重 + 单票上限 20% → 必须触达，且点名 per_symbol。
+
+    只断言"有记录"是不够的：门没真正吃到阈值时也可能记下一条 ok。
+    """
+    headers = await auth_headers()
+    sid = await _make_strategy(client, headers, spec=WEIGHT_SPEC_RISK)
+    r = await client.post(
+        f"/api/v1/strategies/{sid}/backtests",
+        json={**_risk_window(),
+              "risk_thresholds": {"per_symbol_max": 0.2, "industry_max": 0.9,
+                                  "drawdown_max": 0.9, "daily_loss_max": 0.9}},
+        headers=headers,
+    )
+    assert r.status_code == 202, r.json()
+    done = await _wait_terminal_spaced(client, headers, r.json()["id"])
+    assert done["status"] == "COMPLETED", done.get("error")
+    kinds = {i["kind"] for e in done["params"]["risk_events"]
+             for i in e["verdict"]["items"]}
+    assert "per_symbol" in kinds, f"阈值没传到判据：{kinds}"
+
+
+@pytest.mark.asyncio
+async def test_no_thresholds_means_no_verdicts_and_same_result(client, auth_headers):
+    """不传阈值 → 没有 risk_events 键（"没判过"不等于"判过且通过"）。"""
+    headers = await auth_headers()
+    sid = await _make_strategy(client, headers, spec=WEIGHT_SPEC_RISK)
+    run = await _start_backtest(client, headers, sid, _risk_window())
+    done = await _wait_terminal_spaced(client, headers, run["id"])
+    assert done["status"] == "COMPLETED", done.get("error")
+    assert "risk_events" not in done["params"]
+
+
+@pytest.mark.asyncio
+async def test_partial_thresholds_surface_as_unavailable_not_ok(client, auth_headers):
+    """少给一个阈值 → unavailable 并点名缺项；绝不当成"通过"。"""
+    headers = await auth_headers()
+    sid = await _make_strategy(client, headers, spec=WEIGHT_SPEC_RISK)
+    r = await client.post(
+        f"/api/v1/strategies/{sid}/backtests",
+        json={**_risk_window(),
+              "risk_thresholds": {"per_symbol_max": 0.5}},
+        headers=headers,
+    )
+    assert r.status_code == 202, r.json()
+    done = await _wait_terminal_spaced(client, headers, r.json()["id"])
+    assert done["status"] == "COMPLETED", done.get("error")
+    statuses = {e["verdict"]["status"] for e in done["params"]["risk_events"]}
+    assert statuses == {"unavailable"}, statuses

@@ -187,6 +187,19 @@ class RiskModelRequest(BaseModel):
     cooldown_bars: int = Field(default=0, ge=0)
 
 
+class RiskThresholdsRequest(BaseModel):
+    """组合级风控阈值（四个判据各自的阈值；缺席 = 该判据不可判定）。
+
+    **允许部分给出**：少一个阈值时门返回 ``unavailable`` 并点名缺哪个，
+    而不是拒绝请求——"配错/漏配"要能被看见，不能变成"看起来没触达"。
+    """
+
+    per_symbol_max: Decimal | None = Field(default=None, ge=0, le=1)
+    industry_max: Decimal | None = Field(default=None, ge=0, le=1)
+    drawdown_max: Decimal | None = Field(default=None, gt=0, le=1)
+    daily_loss_max: Decimal | None = Field(default=None, gt=0, le=1)
+
+
 class BacktestRequest(BaseModel):
     start: date
     end: date
@@ -201,6 +214,8 @@ class BacktestRequest(BaseModel):
     step: int | None = Field(default=None, gt=0)
     param_grid: dict[str, list] | None = None
     sort_by: str = "sharpe"
+    #: 组合级风控阈值（change4 组 3）。缺席 = 闸不介入，结果与接入前逐位一致。
+    risk_thresholds: RiskThresholdsRequest | None = None
 
     @model_validator(mode="after")
     def _window_ok(self) -> "BacktestRequest":
