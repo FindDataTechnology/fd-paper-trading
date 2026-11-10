@@ -31,8 +31,8 @@
     {
       "vendored": "fd_quant/contracts/models.py",
       "upstream": "fd_quant/contracts/models.py",
-      "bytes": 47138,
-      "sha256": "4f713bb7fe6883925ce77429806bf92d5d5759e7e54694b34c1e1658108888ce"
+      "bytes": 48497,
+      "sha256": "9a3323e314b0416ea2a60afbd7c26d109da8bb5d114e1d15b4f601b1e578350e"
     },
     {
       "vendored": "fd_quant/contracts/unsourced.py",
@@ -67,8 +67,8 @@
     {
       "vendored": "schemas/portfolio-intent.schema.json",
       "upstream": "schemas/portfolio-intent.schema.json",
-      "bytes": 4751,
-      "sha256": "5eeebf47b1d9e4138aeeb8d9b9184dc41564400997624a93ef43fd99878ee382"
+      "bytes": 6079,
+      "sha256": "553889c2a9f0d488b3d06d6501d93150fe10a019821ea241b01a8ed1f6c16e72"
     }
   ]
 }
