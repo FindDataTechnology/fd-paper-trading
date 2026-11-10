@@ -705,3 +705,46 @@ async def test_paper_run_without_thresholds_records_nothing(client, app):
 
     detail = await _run_detail(client, h, run_id)
     assert "risk_events" not in detail["params"]
+
+
+@pytest.mark.asyncio
+async def test_paper_run_records_the_series_ref(client, app):
+    """纸面运行也是"交易路"，同样要把序列出处写进 run.params（change1 4.3）。
+
+    这条之前是缺的：口径（price_caliber）写了，但出处（price_series_ref）没写，
+    于是"这轮用的是哪一路、哪天的、什么复权口径"在运行记录里答不出来。
+    """
+    from fd_paper_trading.marketdata.series_ref import build_series_ref
+
+    class _RefProvider:
+        async def get_bars(self, symbol, timeframe, limit):
+            from fd_paper_trading.marketdata.provider import Bar
+
+            return [Bar(ts=1751000000, open=1, high=1, low=1, close=1, volume=1)]
+
+        async def get_bars_with_coverage(self, symbol, start, end):
+            ref, _ = build_series_ref(
+                source_id="astock_daily", symbol=symbol, adjusted="forward",
+                as_of_max="2026-07-10", window_start="2026-07-01",
+                window_end="2026-07-10", row_count=5,
+                adjustment_anchor="2026-07-10", db_source="astock_daily")
+            return {"missing": [], "market_closed": [], "fill_failed": False,
+                    "fingerprint": "", "adjusted": "forward",
+                    "source": "astock_daily", "series_ref": ref}
+
+        # 水位也要给，否则 _mark_running 走兜底窗（不影响 ref 断言，但更真实）
+        async def source_watermark(self):
+            return {"status": "ok", "as_of": "2026-07-10",
+                    "method": "provider_max_date", "source_id": "astock_daily"}
+
+    await _wire(app, provider=_RefProvider())
+    h = await _authed(client)
+    run_id = await _make_weight_run(app, client, h)
+
+    await app.state.strategy_runner._mark_running(run_id)
+
+    detail = await _run_detail(client, h, run_id)
+    ref = detail["params"]["price_series_ref"]
+    for key in ("source_id", "adjustment", "as_of_max", "fingerprint"):
+        assert ref[key], f"{key} 缺失"
+    assert ref["source_id"] == "astock_daily"

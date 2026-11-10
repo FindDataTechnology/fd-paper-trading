@@ -502,6 +502,31 @@ class PaperRunSupervisor:
                                     "price_as_of_max": watermark.get("as_of"),
                                     "price_watermark_status": watermark.get("status"),
                                 }
+                            # 序列出处（change1 4.3）：纸面运行也是"交易路"，同样要能回答
+                            # "这轮用的是哪一路、哪天的、什么复权口径"。
+                            # 与回测侧 `_series_ref_params` 同一套三态：出得来写 ref、
+                            # 出不来写原因、provider 无此能力则两个键都不写。
+                            ref = cov.get("series_ref")
+                            if ref:
+                                from .._vendor.fd_quant.contracts.models import (
+                                    check_price_series_ref,
+                                )
+
+                                errs = check_price_series_ref(ref)
+                                if errs:
+                                    run.params = {
+                                        **run.params,
+                                        "price_series_ref_unavailable":
+                                            f"invalid:{errs[0].get('path', '?')}",
+                                    }
+                                else:
+                                    run.params = {**run.params, "price_series_ref": ref}
+                            elif cov.get("series_ref_unavailable"):
+                                run.params = {
+                                    **run.params,
+                                    "price_series_ref_unavailable":
+                                        cov["series_ref_unavailable"],
+                                }
                     except Exception:  # noqa: BLE001 - caliber is best-effort
                         pass
                 await self._event(
