@@ -48,9 +48,9 @@ class Settings(BaseSettings):
     # MARKET_DATA_PROVIDER below. An unregistered id is a startup error, never a
     # silent fallback (add-price-supply-and-caliber task 3.1).
     market_data_source_id: str = ""
-    # Legacy selector: kept for one version behind a deprecation warning, then
-    # removed (tasks 3.2 / 6.4). It maps onto a registry id where one exists.
-    market_data_provider: str = "simulated"
+    # 旧选择器 MARKET_DATA_PROVIDER 已在 task 6.4 删除：它的映射层一个版本的生命期
+    # 到期，且生产只剩 MARKET_DATA_SOURCE_ID。若仍设旧变量，启动期直接失败（见
+    # legacy_env_guard）——弃用窗口不该永久存在，也不该悄悄继续生效。
     market_data_api_key: str = ""
     per_user_symbol_limit: int = 20
 
@@ -60,10 +60,7 @@ class Settings(BaseSettings):
     # without a DSN is a startup error, never a silent fallback
     # (service-deployment: 凭据经部署环境注入；未配置选它即明确失败).
     astock_dsn: str = ""
-    # Deprecated and unused: the pinned source now comes from the registry
-    # (MARKET_DATA_SOURCE_ID). Kept as an empty field so existing deployment
-    # manifests that still set ASTOCK_SOURCE keep parsing; removed in task 6.4.
-    astock_source: str = ""
+    # ASTOCK_SOURCE 已于 task 6.4 删除（钉住的源现在只来自注册表声明的 db_source）。
     # Reference basket whose trading days ARE the market calendar (a weekday
     # where most of these did not trade is a proven holiday; a weekday where
     # they traded but the symbol did not is a symbol-level hole). Blue chips

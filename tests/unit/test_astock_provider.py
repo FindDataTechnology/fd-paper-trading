@@ -332,28 +332,33 @@ async def test_coverage_unknown_symbol_whole_window_missing():
 
 # ---- provider selection (spec: market-data swappable + startup error) ----
 
-def _settings(provider: str, dsn: str = ""):
+def _settings(source_id: str = "", dsn: str = ""):
+    """构造 settings。
+
+    task 6.4 起**只有** ``MARKET_DATA_SOURCE_ID`` 这一个选择器；旧字段
+    （market_data_provider / astock_source / astock_calendar_refs）已从 Settings 删除，
+    留在这里只会测到不存在的东西（本轮实测：它们全被静默忽略，回落到 simulated）。
+    """
     class S:
-        market_data_provider = provider
+        market_data_source_id = source_id
         market_data_api_key = ""
         astock_dsn = dsn
-        astock_source = "astock_daily"
-        astock_calendar_refs = "600000,600036,600585,600900,601318"
     return S()
 
 
-def test_astock_selection_without_dsn_is_startup_error():
+def test_registry_id_without_dsn_is_startup_error():
+    """选了 federated_view 源却没 DSN → 启动失败并点名，不回落 simulated。"""
     with pytest.raises(RuntimeError, match="ASTOCK_DSN"):
-        build_market_data_provider(_settings("astock"))
+        build_market_data_provider(_settings("astock_daily"))
 
 
 def test_astock_selection_builds_reader_lazily():
-    p = build_market_data_provider(_settings("astock", dsn="postgresql://ro@h/db"))
+    p = build_market_data_provider(_settings("astock_daily", dsn="postgresql://ro@h/db"))
     assert isinstance(p, AstockMarketDataProvider)  # no connection attempted
 
 
-def test_simulated_fallthrough_unchanged():
-    p = build_market_data_provider(_settings("simulated"))
+def test_unset_source_id_selects_simulated():
+    p = build_market_data_provider(_settings())
     assert type(p).__name__ == "SimulatedMarketDataProvider"
 
 

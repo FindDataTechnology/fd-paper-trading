@@ -34,6 +34,27 @@ async def client(app):
         yield ac
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_legacy_market_data_env():
+    """全程清掉已删除的旧变量（change1 6.4）。
+
+    为什么 session 级：这些变量是**进程环境**，任何一条用例把它带进来，后面的
+    用例都会被启动守卫拒掉——本轮实测本机 `.env` 里就有 `MARKET_DATA_PROVIDER=polygon`，
+    于是 MCP 那批用例全 ERROR，而错误信息看起来像代码坏了。
+
+    清掉而不是断言：测试关心的是"没有旧变量时行为正确"，"有旧变量时启动失败"
+    由 `tests/marketdata/test_source_selection.py` 的专门用例覆盖。
+    """
+    import os
+
+    names = ("MARKET_DATA_PROVIDER", "ASTOCK_SOURCE", "ASTOCK_CALENDAR_REFS")
+    saved = {n: os.environ.pop(n, None) for n in names}
+    yield
+    for n, v in saved.items():
+        if v is not None:
+            os.environ[n] = v
+
+
 @pytest.fixture
 def register(client):
     async def _register(email="user@example.com", password="password123"):

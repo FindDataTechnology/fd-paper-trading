@@ -19,13 +19,22 @@ from fd_paper_trading.marketdata.selection import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _clean_legacy_env(monkeypatch):
+    """清掉开发机/CI 上可能残留的旧变量。
+
+    本轮实测：本机 shell 里就有 MARKET_DATA_PROVIDER，会把"注册表路径"的用例
+    全污染成"旧变量致失败"——看着像代码错，其实是环境脏。测试必须自己擦干净，
+    别指望外部环境干净（这同理适用于任何读 os.environ 的守卫）。
+    """
+    for name in ("MARKET_DATA_PROVIDER", "ASTOCK_SOURCE", "ASTOCK_CALENDAR_REFS"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def _settings(**kw):
     base = dict(
         market_data_source_id="",
-        market_data_provider="simulated",
         astock_dsn="",
-        astock_source="astock_daily",
-        astock_calendar_refs="600000,600036",
         market_data_api_key="",
     )
     base.update(kw)
@@ -38,38 +47,37 @@ def test_unset_selects_simulated():
     assert sel.deprecations == ()
 
 
-def test_unknown_legacy_value_is_refused_not_silently_simulated():
-    """原先未知取值会静默落到 simulated；现在必须报错点名。"""
-    with pytest.raises(SourceSelectionError, match="not a known provider"):
-        resolve_selection(_settings(market_data_provider="astock_v2"))
+# ── 旧变量：task 6.4 起出现即启动失败（映射层已删）─────────────────────
 
 
-def test_legacy_astock_maps_through_registry_and_warns():
-    """旧变量仍可用一个版本，但必须从注册表解析、并打弃用提示。"""
-    sel = resolve_selection(
-        _settings(market_data_provider="astock", astock_dsn="postgresql://ro@x/y")
-    )
-    assert sel.provider == PROVIDER_FEDERATED
-    assert sel.source_id == "astock_daily"
-    assert sel.pinned_source == "astock_daily"
-    assert any("deprecated" in d for d in sel.deprecations)
+@pytest.mark.parametrize("name", ["MARKET_DATA_PROVIDER", "ASTOCK_SOURCE", "ASTOCK_CALENDAR_REFS"])
+def test_legacy_env_var_refuses_startup(name, monkeypatch):
+    """旧变量还在配置里 = 错误配置，直接失败并点名——不悄悄按旧方式跑。
+
+    为什么必须失败而不是忽略：忽略会让"我改过了"与"其实没生效"在观测上完全一样，
+    而那正是这个 change 要消灭的形态。
+    """
+    monkeypatch.setenv(name, "astock")
+    with pytest.raises(SourceSelectionError, match=name):
+        resolve_selection(_settings(market_data_source_id="astock_daily"))
 
 
-def test_legacy_astock_without_dsn_is_refused():
-    with pytest.raises(SourceSelectionError, match="ASTOCK_DSN"):
-        resolve_selection(_settings(market_data_provider="astock"))
+def test_legacy_env_refusal_names_the_removal_and_the_fix(monkeypatch):
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "astock")
+    with pytest.raises(SourceSelectionError) as ei:
+        resolve_selection(_settings())
+    msg = str(ei.value)
+    assert "task 6.4" in msg and "MARKET_DATA_SOURCE_ID" in msg
 
 
-def test_registry_id_wins_over_legacy():
-    sel = resolve_selection(
-        _settings(
-            market_data_source_id="astock_daily",
-            market_data_provider="astock",
-            astock_dsn="postgresql://ro@x/y",
-        )
-    )
-    assert sel.source_id == "astock_daily"
-    assert any("wins" in d for d in sel.deprecations)
+def test_astock_dsn_is_not_a_legacy_variable(monkeypatch):
+    """ASTOCK_DSN 不在此列：它是 federated_view 声明的凭据槽，照旧注入。"""
+    monkeypatch.setenv("ASTOCK_DSN", "postgresql://ro@x/y")
+    sel = resolve_selection(_settings())
+    assert sel.provider == PROVIDER_SIMULATED  # 没有 SOURCE_ID → simulated
+
+
+# ── 注册表 id：唯一选择器 ─────────────────────────────────────────────
 
 
 def test_registry_id_without_dsn_is_refused():
@@ -79,8 +87,11 @@ def test_registry_id_without_dsn_is_refused():
 
 
 def test_unregistered_registry_id_is_refused_and_names_it():
-    with pytest.raises(SourceSelectionError, match="not registered"):
-        resolve_selection(_settings(market_data_source_id="astock_dailyy"))
+    with pytest.raises(SourceSelectionError, match="ASTOCK_DSN|not registered"):
+        resolve_selection(
+            _settings(market_data_source_id="astock_dailyy",
+                      astock_dsn="postgresql://ro@x/y")
+        )
 
 
 def test_registry_id_selects_by_access_kind_not_source_name():
@@ -95,20 +106,9 @@ def test_registry_id_selects_by_access_kind_not_source_name():
     assert sel.source_id == "index-seed"
 
 
-def test_legacy_polygon_and_open_data_still_selectable():
-    assert resolve_selection(
-        _settings(market_data_provider="polygon")
-    ).provider == PROVIDER_POLYGON
-    assert resolve_selection(
-        _settings(market_data_provider="fd-open-data")
-    ).provider == PROVIDER_FD_OPEN_DATA
-
-
-def test_deprecation_warning_is_emitted(caplog):
-    import logging
-
-    with caplog.at_level(logging.WARNING, logger="fd_paper_trading.marketdata.selection"):
-        resolve_selection(
-            _settings(market_data_provider="astock", astock_dsn="postgresql://ro@x/y")
-        )
-    assert any("deprecated" in r.message for r in caplog.records)
+def test_calendar_refs_come_from_the_declaration_not_env(monkeypatch):
+    """参考篮只来自声明（watermark_probe.reference_basket），不再读环境变量。"""
+    monkeypatch.setenv("ASTOCK_DSN", "postgresql://ro@x/y")
+    sel = resolve_selection(_settings(market_data_source_id="astock_daily"))
+    assert sel.calendar_refs  # 声明里带了篮
+    assert "600036" in sel.calendar_refs

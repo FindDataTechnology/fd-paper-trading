@@ -15,27 +15,28 @@ provider 类。协议是取数方式，源名是数据身份，两者分开后�
 装已发布版本。所以在包还没到位的窗口里，``MARKET_DATA_SOURCE_ID`` 一旦被设置就必须
 **明确报错说清缺什么**——绝不静默退回 simulated（那会让回测在假数据上跑出漂亮结果）。
 
-## 旧变量的映射只有一个版本的生命期
+## 旧变量的映射已删除（task 6.4，2026-11-10）
 
-``MARKET_DATA_PROVIDER`` / ``ASTOCK_*`` 保留一个版本的兼容映射，并在启动日志里打弃用提示。
-一个版本的窗口过后（change task 6.4）就删掉——弃用窗口不该永久存在。
+``MARKET_DATA_PROVIDER`` / ``ASTOCK_SOURCE`` / ``ASTOCK_CALENDAR_REFS`` 的兼容映射
+一个版本的生命期已到期，**现已删除**：生产只剩 ``MARKET_DATA_SOURCE_ID``。
+留着的旧变量会让启动**直接失败并点名**，而不是悄悄按旧方式跑——否则
+"我改过了"和"其实没生效"在观测上完全一样。
+
+``ASTOCK_DSN`` 不在此列：它是 federated_view 声明的凭据槽，由注册表按 ``dsn_env`` 取。
 """
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-#: 旧 provider 名 -> 注册表中的 source_id。只是迁移期映射，不是第二事实源：
-#: 值必须在注册表里存在，否则报错。
-LEGACY_PROVIDER_MAP = {
-    "astock": "astock_daily",
-    "fd-open-data": None,   # 本体读面，不是联邦视图源；无对应 source_id
-    "polygon": None,        # 外部 API，无对应 source_id
-    "simulated": None,
-}
+#: 旧变量名（task 6.4 起：出现即启动失败，不再映射）。保留这个清单是为了**报错时点名**，
+#: 不是为了继续支持它们——映身层已删除，弃用窗口到期。
+LEGACY_ENV_VARS = ("MARKET_DATA_PROVIDER", "ASTOCK_SOURCE", "ASTOCK_CALENDAR_REFS")
+
 
 PROVIDER_SIMULATED = "simulated"
 PROVIDER_POLYGON = "polygon"
@@ -133,95 +134,46 @@ def _provider_for_access(kind: str) -> str:
 def resolve_selection(settings: Any) -> Selection:
     """从 settings 解析出一次选择。
 
-    优先级：``MARKET_DATA_SOURCE_ID``（注册表）> 旧 ``MARKET_DATA_PROVIDER`` > simulated。
+    **只认注册表**：``MARKET_DATA_SOURCE_ID`` 是唯一选择器。旧变量
+    （``MARKET_DATA_PROVIDER`` / ``ASTOCK_SOURCE`` / ``ASTOCK_CALENDAR_REFS``）
+    的映射层已在 task 6.4 删除——它们现在还留在配置里就是**错误配置**，
+    直接启动失败并点名，而不是悄悄按旧方式跑（那会让"我改过了"和"其实没生效"
+    长得一模一样）。
     """
+    stale = [
+        name for name in LEGACY_ENV_VARS
+        if (os.environ.get(name) or "").strip()
+    ]
+    if stale:
+        raise SourceSelectionError(
+            "legacy market-data variable(s) still set: " + ", ".join(stale)
+            + ". The compatibility mapping was removed (add-price-supply-and-caliber "
+            "task 6.4). Remove them and set MARKET_DATA_SOURCE_ID to a registered "
+            "source id instead; refusing to start on a deprecated selector."
+        )
+
     source_id = (getattr(settings, "market_data_source_id", "") or "").strip()
-    legacy = (getattr(settings, "market_data_provider", "") or "").strip()
-    deprecations: list[str] = []
+    if not source_id:
+        return Selection(provider=PROVIDER_SIMULATED)
 
-    if source_id:
-        if legacy and legacy not in ("", "simulated"):
-            deprecations.append(
-                f"both MARKET_DATA_SOURCE_ID={source_id!r} and legacy "
-                f"MARKET_DATA_PROVIDER={legacy!r} are set; the registry id wins "
-                "and the legacy variable is deprecated"
-            )
-        decl = _registry_access(source_id)
-        provider = _provider_for_access(decl.access.kind)
-        dsn = _dsn_for(settings, decl.access.dsn_env)
-        if provider == PROVIDER_FEDERATED and not dsn:
-            raise SourceSelectionError(
-                f"source {source_id!r} uses access.kind=federated_view and needs "
-                f"{decl.access.dsn_env} (read-only DSN); refusing to fall through "
-                "to another provider"
-            )
-        deprecations.append(
-            "MARKET_DATA_PROVIDER / ASTOCK_* are deprecated in favour of "
-            "MARKET_DATA_SOURCE_ID; the compatibility mapping is removed next version"
+    decl = _registry_access(source_id)
+    provider = _provider_for_access(decl.access.kind)
+    dsn = _dsn_for(settings, decl.access.dsn_env)
+    if provider == PROVIDER_FEDERATED and not dsn:
+        raise SourceSelectionError(
+            f"source {source_id!r} uses access.kind=federated_view and needs "
+            f"{decl.access.dsn_env} (read-only DSN); refusing to fall through "
+            "to another provider"
         )
-        for note in deprecations:
-            logger.warning("[market-data] %s", note)
-        return Selection(
-            provider=provider,
-            source_id=source_id,
-            db_source=decl.db_source,
-            dsn=dsn,
-            calendar_refs=getattr(settings, "astock_calendar_refs", "") or "",
-            deprecations=tuple(deprecations),
-        )
-
-    # ---- 迁移期：旧变量 ----
-    if legacy and legacy not in ("simulated", ""):
-        mapped = LEGACY_PROVIDER_MAP.get(legacy, "unmapped")
-        if mapped == "unmapped":
-            # 未知取值原先会静默落到 simulated —— 这正是要在本次消灭的形态。
-            raise SourceSelectionError(
-                f"MARKET_DATA_PROVIDER={legacy!r} is not a known provider "
-                f"(known: {', '.join(sorted(LEGACY_PROVIDER_MAP))}) and has no "
-                "registry source_id; set MARKET_DATA_SOURCE_ID instead of relying "
-                "on a silent fallthrough to simulated"
-            )
-        if mapped is None:
-            deprecations.append(
-                f"MARKET_DATA_PROVIDER={legacy!r} is deprecated; set "
-                "MARKET_DATA_SOURCE_ID once that source is registered"
-            )
-            for note in deprecations:
-                logger.warning("[market-data] %s", note)
-            if legacy == "polygon":
-                return Selection(
-                    provider=PROVIDER_POLYGON,
-                    deprecations=tuple(deprecations),
-                )
-            if legacy == "fd-open-data":
-                return Selection(
-                    provider=PROVIDER_FD_OPEN_DATA,
-                    deprecations=tuple(deprecations),
-                )
-        else:
-            decl = _registry_access(mapped)
-            dsn = _dsn_for(settings, decl.access.dsn_env)
-            if _provider_for_access(decl.access.kind) == PROVIDER_FEDERATED and not dsn:
-                # 旧代码在这里有一道守卫（MARKET_DATA_PROVIDER=astock 且无 DSN 即启动失败）；
-                # 迁移期必须保留同样的行为，否则"选了源但没有凭据"会静默退化成别的 provider。
-                raise SourceSelectionError(
-                    f"MARKET_DATA_PROVIDER={legacy!r} resolves to {mapped!r}, which uses "
-                    f"access.kind=federated_view and needs {decl.access.dsn_env} "
-                    "(read-only DSN); refusing to fall through to another provider"
-                )
-            deprecations.append(
-                f"MARKET_DATA_PROVIDER={legacy!r} is deprecated; use "
-                f"MARKET_DATA_SOURCE_ID={mapped!r} (resolved from the registry)"
-            )
-            for note in deprecations:
-                logger.warning("[market-data] %s", note)
-            return Selection(
-                provider=_provider_for_access(decl.access.kind),
-                source_id=mapped,
-                db_source=decl.db_source,
-                dsn=dsn,
-                calendar_refs=getattr(settings, "astock_calendar_refs", "") or "",
-                deprecations=tuple(deprecations),
-            )
-
+    basket = ",".join(getattr(decl.watermark_probe, "reference_basket", ()) or ())
+    return Selection(
+        provider=provider,
+        source_id=source_id,
+        db_source=decl.db_source,
+        dsn=dsn,
+        # 参考篮只来自注册表声明（watermark_probe.reference_basket）；
+        # ASTOCK_CALENDAR_REFS 已在 6.4 删除，不再从环境读。
+        calendar_refs=basket,
+        deprecations=(),
+    )
     return Selection(provider=PROVIDER_SIMULATED)
