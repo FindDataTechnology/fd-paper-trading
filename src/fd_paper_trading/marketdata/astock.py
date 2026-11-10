@@ -126,6 +126,7 @@ class AstockMarketDataProvider(MarketDataProvider):
         fetcher=None,
         source: str | None = None,
         calendar_refs: str = DEFAULT_CALENDAR_REFS,
+        registry_source_id: str | None = None,
     ):
         if not source:
             raise ValueError(
@@ -142,6 +143,10 @@ class AstockMarketDataProvider(MarketDataProvider):
             fetcher = _AsyncpgReader(dsn)
         self._fetch = fetcher
         self._source = source
+        # 注册表 id（与 ``source`` 的 db_source 不是同一个东西：前者是数据身份，
+        # 后者是联邦视图里钉住的 ``source_used``）。只有它能让本 provider 问到
+        # 「这个源的水位到哪一天」——见 ``source_watermark``。
+        self._registry_source_id = registry_source_id
         self._calendar_ref_codes = [
             c.strip() for c in (calendar_refs or "").split(",") if c.strip()
         ]
@@ -153,6 +158,38 @@ class AstockMarketDataProvider(MarketDataProvider):
         self._ref_ids: list[int] | None = None
         self._basket_ceiling: str | None = None
         self._lock = asyncio.Lock()
+
+    # ---- source watermark（能力方法，非必需接口）----
+
+    def source_watermark(self) -> dict | None:
+        """本 provider 所钉源的实时水位（change1 task 6.5）。
+
+        形状是 ``Watermark.to_dict()``：``{source_id, as_of, status, method,
+        basket, lookback_days, detail}``。``as_of`` 为 ``None`` 时 ``status``
+        说明原因（``no_data`` / ``unreachable``）。
+
+        为什么要有它：判据探针原先用**固定 400 天盲窗**去躲开上游数据滞后
+        （astock_daily 只到 2026-07-10，同日探针取不到真实 bar）。水位把这个
+        偏移变成了查得到的事实——拿水位当窗口右端，窗口就能收回到正常宽度。
+
+        **问不到就返回 None**，不返回 ``as_of=None`` 的假水位：调用方据此退回
+        固定窗口（卸载前的行为），而不是把"注册表包没装"当成"这个源没数据"。
+        """
+        if not self._registry_source_id:
+            return None
+        try:
+            from fd_open_data_mcp.price_sources.registry import (  # type: ignore[import-not-found]
+                watermark_for,
+            )
+
+            return watermark_for(self._registry_source_id).to_dict()
+        except Exception:  # noqa: BLE001 - 水位是尽力而为，绝不影响交易路径
+            logger.warning(
+                "source_watermark(%s) unavailable; callers fall back to the fixed probe window",
+                self._registry_source_id,
+                exc_info=True,
+            )
+            return None
 
     # ---- concepts / entity resolution ----
 

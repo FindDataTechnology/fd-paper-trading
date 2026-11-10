@@ -80,6 +80,10 @@ def __getattr__(name: str):
                     dsn=sel.dsn,
                     source=sel.pinned_source,
                     calendar_refs=sel.calendar_refs or settings.astock_calendar_refs,
+                    # 注册表 id 传进去，provider 才能报出"这个源的水位到哪天"
+                    # （task 6.5）。旧路径（无 MARKET_DATA_SOURCE_ID）为 None，
+                    # provider 就不提供水位，判据探针退回固定窗口。
+                    registry_source_id=sel.source_id,
                 )
             if sel.provider == PROVIDER_FD_OPEN_DATA:
                 return FdOpenDataMarketDataProvider()

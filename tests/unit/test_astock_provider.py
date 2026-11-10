@@ -356,3 +356,45 @@ def test_simulated_fallthrough_unchanged():
 def test_provider_declares_daily_only():
     p = _provider(FakeReader())
     assert p.supported_timeframes == ("1d",)
+
+
+# ------------------------------------------------------- 源水位能力（task 6.5）
+
+
+def test_source_watermark_is_none_without_registry_source_id():
+    """旧路径（MARKET_DATA_PROVIDER=astock，无 MARKET_DATA_SOURCE_ID）不提供水位。
+
+    返回 ``None`` 而不是编一个空水位：调用方据此知道"没能力问"，而不是
+    "问过了、没有"。
+    """
+    p = _provider()
+    assert p.source_watermark() is None
+
+
+def test_source_watermark_swallows_registry_failure(monkeypatch):
+    """注册表包缺失 / 查询炸掉 → 返回 None，绝不把异常抛进交易路径。"""
+    p = _provider(registry_source_id="astock_daily")
+
+    import fd_open_data_mcp.price_sources.registry as reg_mod
+
+    def _boom(_sid, **_kw):
+        raise RuntimeError("registry unreachable")
+
+    monkeypatch.setattr(reg_mod, "watermark_for", _boom)
+    assert p.source_watermark() is None
+
+
+def test_source_watermark_passes_through_the_registry_answer(monkeypatch):
+    """查到什么就报什么，不在 provider 里二次改写水位。"""
+    p = _provider(registry_source_id="astock_daily")
+
+    import fd_open_data_mcp.price_sources.registry as reg_mod
+    from fd_open_data_mcp.price_sources.watermark import Watermark
+
+    monkeypatch.setattr(reg_mod, "watermark_for", lambda sid, **_kw: Watermark(
+        source_id=sid, as_of="2026-07-10", status="ok",
+        method="reference_basket", basket=("600036",), lookback_days=400))
+    got = p.source_watermark()
+    assert got["source_id"] == "astock_daily"
+    assert got["as_of"] == "2026-07-10"
+    assert got["status"] == "ok"

@@ -495,3 +495,114 @@ async def test_mark_running_records_caliber_for_weight_run(client, app):
         run = await session.get(StrategyRun, run_id)
         assert run.params["price_caliber"] == "forward"
         assert run.params["price_source"] == "astock_daily"
+
+
+# ---------------------------------------------------------------------------
+# 探针窗锚在源水位上（change1 task 6.5：卸载 400 天盲窗）
+# ---------------------------------------------------------------------------
+
+
+class _WatermarkProvider(_ControlledProvider):
+    """带水位能力的 provider：探针窗必须钉在水位右端，而不是 400 天盲窗。
+
+    ``calls`` 记下每次探针的 ``(start, end)``——判据不是"caliber 记上了"（那条
+    400 天窗也能过），而是"窗口真的收窄并以水位为右端"。
+    """
+
+    def __init__(self, watermark: dict | None):
+        super().__init__()
+        self._watermark = watermark
+        self.calls: list[tuple[date, date]] = []
+
+    def source_watermark(self) -> dict | None:
+        return self._watermark
+
+    async def get_bars_with_coverage(self, symbol, start, end):
+        self.calls.append((start, end))
+        return {"adjusted": "forward", "source": "astock_daily"}
+
+
+@pytest.mark.asyncio
+async def test_mark_running_anchors_probe_window_on_watermark(client, app):
+    """水位说这个源只到 2026-07-10 → 窗口右端就是它，宽度回到 35 天。
+
+    若有人把 ``caliber_probe_window`` 的接线删掉（400 天盲窗回来），
+    ``end`` 会变成"今天"而不是水位，这条直接红。
+    """
+    from fd_paper_trading.strategy.runner import CALIBER_PROBE_DAYS
+
+    provider = _WatermarkProvider(
+        {"source_id": "astock_daily", "as_of": "2026-07-10", "status": "ok"})
+    await _wire(app, provider=provider)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h)
+    run_id = await _make_run_db(app, uuid.UUID(strat["id"]), account_id)
+
+    await app.state.strategy_runner._mark_running(run_id)
+
+    assert provider.calls, "没有发生判据探针"
+    start, end = provider.calls[0]
+    assert end == date(2026, 7, 10), f"窗口右端应钉在水位上，实际 {end}"
+    assert (end - start).days == CALIBER_PROBE_DAYS
+
+    async with app.state.db.session_factory() as session:
+        run = await session.get(StrategyRun, run_id)
+        assert run.params["price_caliber"] == "forward"
+        # 水位留痕：判据是"那一刻这个源的哪段数据"，事后要能复现
+        assert run.params["price_as_of_max"] == "2026-07-10"
+        assert run.params["price_watermark_status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_mark_running_keeps_fixed_window_when_watermark_unavailable(client, app):
+    """问不到水位（no_data）→ 退回 400 天固定窗，行为与卸载前逐位一致。
+
+    这是防"卸载补丁顺手把兜底也删了"：没有水位要让判据照常可评，而不是
+    把"问不到"当成"判据未知"。
+    """
+    from fd_paper_trading.strategy.runner import CALIBER_PROBE_FALLBACK_DAYS
+
+    provider = _WatermarkProvider({"status": "no_data", "as_of": None})
+    await _wire(app, provider=provider)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h)
+    run_id = await _make_run_db(app, uuid.UUID(strat["id"]), account_id)
+
+    await app.state.strategy_runner._mark_running(run_id)
+
+    start, end = provider.calls[0]
+    assert (end - start).days == CALIBER_PROBE_FALLBACK_DAYS
+    assert end == datetime.now(timezone.utc).date()
+
+    async with app.state.db.session_factory() as session:
+        run = await session.get(StrategyRun, run_id)
+        assert run.params["price_caliber"] == "forward"
+        # **问过且答"没有"** 与 **没能力问** 是两件事，前者要留痕：
+        # as_of=None + status=no_data 说的是"查了，这个源没数据"。
+        assert run.params["price_as_of_max"] is None
+        assert run.params["price_watermark_status"] == "no_data"
+
+
+@pytest.mark.asyncio
+async def test_mark_running_records_no_watermark_keys_without_the_capability(client, app):
+    """provider 没有 ``source_watermark`` 能力 → 一个字都不留。
+
+    这条与上一条成对：留 ``None`` 和留空键是两种语义。若有人把两者合并成
+    "统一写 None"，这条会红——那等于把"没问过"伪装成"问过、没有"。
+    """
+    provider = _CoverageProvider()   # 只有覆盖能力，没有水位能力
+    await _wire(app, provider=provider)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h)
+    run_id = await _make_run_db(app, uuid.UUID(strat["id"]), account_id)
+
+    await app.state.strategy_runner._mark_running(run_id)
+
+    async with app.state.db.session_factory() as session:
+        run = await session.get(StrategyRun, run_id)
+        assert run.params["price_caliber"] == "forward"
+        assert "price_as_of_max" not in run.params
+        assert "price_watermark_status" not in run.params

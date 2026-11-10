@@ -79,6 +79,40 @@ from .weights import validate_weights
 
 UTC = timezone.utc
 
+#: 判据探针窗宽度（天）。以**源水位**为右端取最近这么多天——正常宽度，
+#: 足够覆盖一个长假与一周的滞后。
+CALIBER_PROBE_DAYS = 35
+#: 问不到源水位时的兜底窗。这是卸载 400 天盲窗前的行为，逐位保留：
+#: 一个问不出水位的 provider 不该因此丢掉判据（那会是"读不到"="不存在"）。
+CALIBER_PROBE_FALLBACK_DAYS = 400
+
+
+def caliber_probe_window(watermark: dict | None,
+                         today: "datetime.date") -> tuple["datetime.date", "datetime.date"]:
+    """把「源水位」翻译成判据探针的 ``(start, end)``。
+
+    有水位：``end = as_of``，往回 ``CALIBER_PROBE_DAYS`` 天。
+    没水位（``None`` / ``status != ok`` / ``as_of`` 解析不了 / 水位在未来）：
+    ``end = today``，往回 ``CALIBER_PROBE_FALLBACK_DAYS`` 天。
+
+    水位在**未来**也算不可用：那是时钟或上游写错了，拿它当右端会取到一个
+    空窗口然后诚实地报"判据未知"——把配置错误伪装成数据缺失。
+    """
+    end = today
+    days = CALIBER_PROBE_FALLBACK_DAYS
+    if watermark and watermark.get("status") == "ok":
+        raw = watermark.get("as_of")
+        if raw:
+            try:
+                as_of = date.fromisoformat(str(raw)[:10])
+            except ValueError:
+                as_of = None
+            if as_of is not None and as_of <= today:
+                end = as_of
+                days = CALIBER_PROBE_DAYS
+    return end - timedelta(days=days), end
+
+
 
 def _bar_date(bar) -> "datetime.date":
     return datetime.fromtimestamp(bar.ts, tz=UTC).date()
@@ -424,23 +458,42 @@ class PaperRunSupervisor:
                             first_symbol = None
                 if coverage_fn is not None and first_symbol:
                     try:
-                        # A real trailing window, not same-day: a provider whose
-                        # data lags (e.g. astock_daily to 2026-07-10) fails
-                        # closed on a same-day probe (empty observed series)
-                        # and would report adjusted=unknown even though it
-                        # declares a caliber. 400 days keeps a real bar in the
-                        # window across a multi-month feed lag; the unprovable
-                        # tail stays honestly 'missing' without touching the
-                        # declared caliber.
-                        cov = await coverage_fn(first_symbol,
-                                                datetime.now(UTC).date() - timedelta(days=400),
-                                                datetime.now(UTC).date())
+                        # Probe a window anchored on the source's *watermark*, not
+                        # on the wall clock: a provider whose feed lags (e.g.
+                        # astock_daily to 2026-07-10) has no bar in a same-day
+                        # window, and would report adjusted=unknown even though it
+                        # declares a caliber. The registry now publishes that
+                        # offset as a fact, so the window shrinks back to its
+                        # normal width instead of blindly spanning 400 days
+                        # (change1 task 6.5). Providers that cannot answer keep
+                        # the old fixed window — asking is best-effort, never a
+                        # precondition for recording a caliber.
+                        watermark = None
+                        watermark_fn = getattr(
+                            self.app.state.market_data_provider,
+                            "source_watermark", None)
+                        if watermark_fn is not None:
+                            try:
+                                watermark = await asyncio.to_thread(watermark_fn)
+                            except Exception:  # noqa: BLE001 - 尽力而为
+                                watermark = None
+                        probe_start, probe_end = caliber_probe_window(
+                            watermark, datetime.now(UTC).date())
+                        cov = await coverage_fn(first_symbol, probe_start, probe_end)
                         if cov.get("adjusted"):
                             run.params = {
                                 **(run.params or {}),
                                 "price_caliber": cov["adjusted"],
                                 "price_source": cov.get("source"),
                             }
+                            if watermark:
+                                # 水位落库：判据是"那一刻这个源的哪段数据"，
+                                # 水位是这段数据的右端——不留痕就无法事后复现。
+                                run.params = {
+                                    **run.params,
+                                    "price_as_of_max": watermark.get("as_of"),
+                                    "price_watermark_status": watermark.get("status"),
+                                }
                     except Exception:  # noqa: BLE001 - caliber is best-effort
                         pass
                 await self._event(
