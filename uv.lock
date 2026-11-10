@@ -738,7 +738,7 @@ server = [
 
 [[package]]
 name = "fd-open-data-mcp"
-version = "0.5.40"
+version = "0.5.60"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "alembic" },
@@ -758,9 +758,9 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a7/ac/536744cd40ca7010ee38ce6dd4b1d42582fed81e1edb51ced238b80dfe37/fd_open_data_mcp-0.5.40.tar.gz", hash = "sha256:7b716dfd23b5b65dc57b5c48e3b77455b3bf08c55e2509ef1ae4a140f65c9c47", size = 970064, upload-time = "2026-10-18T19:49:18.937Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d2/63/aae302fff2f398107074f326367b9763d5ba17caf1aaf407e92ef986c4ca/fd_open_data_mcp-0.5.60.tar.gz", hash = "sha256:ee33e482ab71348d76cf59f66cda136d259c1ba89913c2f620e0be7e8e00c833", size = 1292617, upload-time = "2026-11-10T06:38:02.184Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a1/c2/d415e68c0f780cd68b4c5e459ffea5a03e1c6925522ddd54fcf95ae7c5ea/fd_open_data_mcp-0.5.40-py3-none-any.whl", hash = "sha256:91e939fe4679b14694332cefc2d260e2ea099e68a0d6e58a6b752ce75aa8d19e", size = 720264, upload-time = "2026-10-18T19:49:17.044Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/d3/8cff8698781095d2589291ef4852544430dc8ed9b60691795456ba8a8464/fd_open_data_mcp-0.5.60-py3-none-any.whl", hash = "sha256:3c638b0fbd1c224f67a9c1cb895cab916083b437f8a1e30bc66fddb16dd9f868", size = 894471, upload-time = "2026-11-10T06:38:00.673Z" },
 ]
 
 [package.optional-dependencies]
@@ -776,15 +776,15 @@ data = [
 
 [[package]]
 name = "fd-open-data-protocol"
-version = "0.3.1"
+version = "0.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/48/d6/d0e3d2299616b7a03d964f807a77414c6a64ba7ae89b035201aa980480f9/fd_open_data_protocol-0.3.1.tar.gz", hash = "sha256:83b5d616c12ea40c78e622287bc22a131a7793f0c8da33b784839544900f8a2a", size = 45245, upload-time = "2026-10-02T07:25:20.212Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dd/48/0cff3425c79a6d88040a01ca56cd138ef7d80c0b307ff28c23576fde229b/fd_open_data_protocol-0.3.2.tar.gz", hash = "sha256:9c1640d5134779c2c30e14300dcb27c5468bed7bf02aec95939a2a32b2d555bd", size = 51710, upload-time = "2026-11-04T13:08:00.739Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ac/fb/307833b51f9d3319081a6e2773742f9e7ed22bc982799ae2f85f872ca82b/fd_open_data_protocol-0.3.1-py3-none-any.whl", hash = "sha256:5ce3d0f9e502ab07759e58de34955ddbcbba9814fd4b1d060730e48e140b703e", size = 40724, upload-time = "2026-10-02T07:25:19.022Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/97/6f58f26f2dc097c777d04aa6b50f6208e8579c8840d26ed1d836a48d0f46/fd_open_data_protocol-0.3.2-py3-none-any.whl", hash = "sha256:2606e820fc6e696b01c750579a8a077c42a5d1e4fc2914c90e79a5231dc12082", size = 46084, upload-time = "2026-11-04T13:07:59.491Z" },
 ]
 
 [[package]]
