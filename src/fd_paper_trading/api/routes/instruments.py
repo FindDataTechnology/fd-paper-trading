@@ -1,6 +1,8 @@
 """Instrument search and historical bars endpoints under /api/v1/instruments."""
 
-from fastapi import APIRouter, Depends, Query, Request
+import json
+
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from ...auth.dependencies import get_current_user
 from ...marketdata import (
@@ -17,6 +19,33 @@ router = APIRouter(tags=["instruments"])
 
 def _provider(request: Request):
     return request.app.state.market_data_provider
+
+
+#: 行情响应头：契约对象（与 `contracts/models.py` 的 `PriceSeriesRef` 同形）。
+#: 放在头里而不是响应体里——`/bars` 向来返回裸数组，改结构会打断图表与所有
+#: 既有消费方；头是纯增量，"每个价格响应都带引用"这条因此不必以破坏兼容为代价。
+SERIES_REF_HEADER = "X-Price-Series-Ref"
+
+
+def _attach_series_ref(response: Response, provider, symbol: str, bars) -> None:
+    """provider 能说出处就挂头，说不出就不挂（不给假引用）。
+
+    「没有这个头」= provider 没有这个能力（simulated / polygon）；
+    有头但内容不合法是不可能的——provider 侧已用契约校验器自校过。
+    """
+    build = getattr(provider, "series_ref_for_bars", None)
+    if build is None or not bars:
+        return
+    try:
+        ref = build(symbol, bars)
+    except Exception:  # noqa: BLE001 - 出处是尽力而为，绝不让行情接口失败
+        return
+    if not ref:
+        return
+    response.headers[SERIES_REF_HEADER] = json.dumps(
+        ref, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    )
+
 
 
 @router.get("/instruments/capabilities")
@@ -53,6 +82,7 @@ async def search_instruments(
 @router.get("/instruments/{symbol}/bars", response_model=list[BarOut])
 async def get_bars(
     request: Request,
+    response: Response,
     symbol: str,
     timeframe: str = Query(default="1m"),
     limit: int = Query(default=DEFAULT_BAR_LIMIT, ge=1, le=MAX_BAR_LIMIT),
@@ -84,6 +114,7 @@ async def get_bars(
         # Any provider that still raises on an unserved timeframe must not turn
         # a client mistake into a 500.
         raise APIError("invalid_timeframe", str(exc), 400) from exc
+    _attach_series_ref(response, provider, symbol, bars)
     return [
         BarOut(
             ts=b.ts,

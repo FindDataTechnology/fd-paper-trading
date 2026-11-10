@@ -459,3 +459,47 @@ async def test_empty_window_explains_why_there_is_no_ref():
     out = await p.get_bars_with_coverage("600036", "2026-07-08", "2026-07-09")
     assert "series_ref" not in out
     assert out["series_ref_unavailable"] == "no_as_of_max"
+
+
+# ------------------------------------------------- 行情接口的序列引用（需求「每个价格响应都带引用」）
+
+
+@pytest.mark.asyncio
+async def test_series_ref_for_bars_uses_the_returned_window():
+    """cheap 版 ref：窗口 = 实际返回的这一段，row_count = 实际行数。"""
+    from fd_paper_trading._vendor.fd_quant.contracts.models import (
+        check_price_series_ref,
+    )
+
+    rows = [_bar_row("2026-07-08", 37, 38, 36, 37.7),
+            _bar_row("2026-07-09", 37, 38, 36, 37.5)]
+    p = _provider(FakeReader(bars=rows), registry_source_id="astock_daily")
+    p._decl = _Decl()
+    p._decl_loaded = True
+    bars = await p.get_bars("600036", "1d", 2)
+    assert bars, "夹具应返回 bar"
+    ref = p.series_ref_for_bars("600036", bars)
+    assert ref is not None
+    assert check_price_series_ref(ref) == []
+    assert ref["symbol"] == "600036"
+    assert ref["adjustment"] == "qfq"
+    assert ref["row_count"] == len(bars)
+    # 窗口两端就是首末 bar 的日期（不是"请求了多少天"）
+    assert ref["window_start"] <= ref["as_of_max"] == ref["window_end"]
+
+
+def test_series_ref_for_bars_is_none_without_bars():
+    """没有 bar 就没有 as_of_max：返回 None，不编一个空 ref。"""
+    p = _provider(FakeReader(), registry_source_id="astock_daily")
+    p._decl = _Decl()
+    p._decl_loaded = True
+    assert p.series_ref_for_bars("600036", []) is None
+
+
+def test_series_ref_for_bars_is_none_without_registry_identity():
+    """旧路径（无注册表 id）→ 不出 ref（与覆盖路径同一判据）。"""
+    from fd_paper_trading.marketdata.provider import Bar
+
+    p = _provider(FakeReader())
+    bars = [Bar(ts=1751000000, open=1, high=1, low=1, close=1, volume=1)]
+    assert p.series_ref_for_bars("600036", bars) is None

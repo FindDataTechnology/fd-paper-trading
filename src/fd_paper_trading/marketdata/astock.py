@@ -220,8 +220,39 @@ class AstockMarketDataProvider(MarketDataProvider):
             self._decl = None
         return self._decl
 
-    # ---- concepts / entity resolution ----
+    def series_ref_for_bars(self, symbol: str, bars) -> dict | None:
+        """行情接口的序列引用（cheap 版，change1 需求「每个价格响应都带引用」）。
 
+        与覆盖路径的 ref 同一套字段、同一个指纹函数，但**不做补洞探测**：
+        行情端点只回答"这串 bar 是哪来的"，不需要证明窗口完整。窗口就是"实际
+        返回的这一段"（首末 bar 的日期），``row_count`` 是实际行数——不假装是
+        请求区间。
+
+        没有 bar 就没有 as_of_max，也就没有 ref；返回 ``None`` 而不是空对象。
+        """
+        if not bars:
+            return None
+        from .series_ref import build_series_ref
+
+        decl = self._declaration()
+        adjusted = getattr(decl, "adjustment", None) if decl is not None else _ADJUSTED
+        dates = sorted(datetime.fromtimestamp(b.ts, tz=timezone.utc).date() for b in bars)
+        ref, _reason = build_series_ref(
+            source_id=self._registry_source_id,
+            symbol=symbol,
+            adjusted=adjusted,
+            as_of_max=dates[-1].isoformat(),
+            window_start=dates[0].isoformat(),
+            window_end=dates[-1].isoformat(),
+            row_count=len(bars),
+            adjustment_anchor=(getattr(decl, "adjustment_anchor", None)
+                               if decl is not None else None),
+            db_source=(getattr(decl, "db_source", None) if decl is not None
+                       else self._source),
+        )
+        return ref
+
+    # ---- concepts / entity resolution ----
     async def _concepts(self, entity_type: str) -> dict[str, int]:
         """Resolve the concept family (code → id), deterministically.
 

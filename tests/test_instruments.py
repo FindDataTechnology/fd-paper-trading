@@ -139,3 +139,78 @@ async def test_provider_valueerror_becomes_400(app, auth_headers, monkeypatch):
         r = await ac.get("/api/v1/instruments/AAPL/bars?timeframe=5m&limit=5", headers=h)
     assert r.status_code == 400, f"expected 400, got {r.status_code}: {r.text}"
     assert "daily bars only" in r.text
+
+
+# ---------------------------------------------------------------------------
+# 行情响应携带序列引用（需求：每个价格响应都带引用）
+# ---------------------------------------------------------------------------
+
+
+async def test_bars_body_unchanged_but_ref_rides_in_a_header(client, auth_headers, app):
+    """响应体仍是裸数组（不破坏图表），引用放头里。
+
+    这是"零破坏"与"每个价格响应都带出处"两条约束的交点：体不动、头增量。
+    """
+    import json
+
+    from fd_paper_trading._vendor.fd_quant.contracts.models import (
+        check_price_series_ref,
+    )
+
+    class _RefProvider:
+        async def get_bars(self, symbol, timeframe, limit):
+            from fd_paper_trading.marketdata.provider import Bar
+
+            return [Bar(ts=1751000000 + i, open=1, high=1, low=1, close=1,
+                        volume=1) for i in range(3)]
+
+        def series_ref_for_bars(self, symbol, bars):
+            from fd_paper_trading.marketdata.series_ref import build_series_ref
+
+            ref, _ = build_series_ref(
+                source_id="astock_daily", symbol=symbol, adjusted="forward",
+                as_of_max="2026-07-10", window_start="2026-07-08",
+                window_end="2026-07-10", row_count=len(bars),
+                adjustment_anchor="2026-07-10", db_source="astock_daily",
+            )
+            return ref
+
+    h = await auth_headers()
+    app.state.market_data_provider = _RefProvider()
+    r = await client.get("/api/v1/instruments/600036/bars?timeframe=1d&limit=3",
+                         headers=h)
+    assert r.status_code == 200
+    assert isinstance(r.json(), list) and len(r.json()) == 3   # 体没变
+    raw = r.headers["x-price-series-ref"]
+    ref = json.loads(raw)
+    assert check_price_series_ref(ref) == []
+    assert ref["source_id"] == "astock_daily"
+    assert ref["symbol"] == "600036"
+
+
+async def test_no_ref_header_when_the_provider_cannot_say(client, auth_headers, app):
+    """simulated 等 provider 说不出处 → 不挂头，而不是挂一个假引用。"""
+    h = await auth_headers()
+    r = await client.get("/api/v1/instruments/AAPL/bars?timeframe=1m&limit=5",
+                         headers=h)
+    assert r.status_code == 200
+    assert "x-price-series-ref" not in r.headers
+
+
+async def test_a_broken_ref_builder_never_breaks_the_bars_endpoint(client, auth_headers, app):
+    """出处是尽力而为：provider 的 ref 构造抛异常，行情照常返回。"""
+    class _Broken:
+        async def get_bars(self, symbol, timeframe, limit):
+            from fd_paper_trading.marketdata.provider import Bar
+
+            return [Bar(ts=1751000000, open=1, high=1, low=1, close=1, volume=1)]
+
+        def series_ref_for_bars(self, symbol, bars):
+            raise RuntimeError("boom")
+
+    h = await auth_headers()
+    app.state.market_data_provider = _Broken()
+    r = await client.get("/api/v1/instruments/600036/bars?timeframe=1d&limit=1",
+                         headers=h)
+    assert r.status_code == 200
+    assert "x-price-series-ref" not in r.headers
