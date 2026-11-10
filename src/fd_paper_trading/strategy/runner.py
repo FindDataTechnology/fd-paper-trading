@@ -938,6 +938,48 @@ class PaperRunSupervisor:
         }
         await session.commit()
 
+
+    async def _record_risk_verdict(self, session, run: StrategyRun, day: date,
+                                   actual_weights: Mapping[str, float] | None) -> None:
+        """组合级风控判定随 run 留痕（change4 3.2）。
+
+        **只判定、不处置**：门按契约不产出任何"清仓/减仓"字段（change4 1.5），
+        这里也不据此改写订单——触达之后要不要停手属于组合纪律，不是实现方的默认值。
+        所以这一步的产物只有一个：`run.params["risk_events"]` 里多一条可复核的判定。
+
+        没配阈值就什么都不做（`risk_thresholds` 缺席 → 键不出现），
+        而不是记一条"ok"——"没判过"与"判过且通过"必须能分开。
+        """
+        thresholds = (run.params or {}).get("risk_thresholds")
+        if not thresholds:
+            return
+        from .._vendor.fd_quant.risk import evaluate_portfolio_gate
+
+        # 只判真实持仓：CASH 是现金占比，不是可风控的标的（把它当标的会让
+        # "单票集中度"里多出一条永远无害的项）。
+        weights = {sym: float(w) for sym, w in (actual_weights or {}).items()
+                   if sym != "CASH"}
+        if not weights:
+            return
+        points = await StrategyRunRepository(session).list_equity_points(run.id)
+        equity_series = [(p.date.isoformat(), float(p.equity)) for p in points]
+        try:
+            verdict = evaluate_portfolio_gate(
+                weights=weights,
+                thresholds=thresholds,
+                sectors=(run.params or {}).get("risk_sectors"),
+                equity_series=equity_series or None,
+                as_of=day.isoformat(),
+                price_as_of_max=(run.params or {}).get("price_as_of_max"),
+            )
+        except Exception:  # noqa: BLE001 - 判定是留痕，绝不让交易 tick 失败
+            logger.warning("risk verdict failed for run %s on %s", run.id, day,
+                           exc_info=True)
+            return
+        events = list((run.params or {}).get("risk_events") or [])
+        events.append({"day": day.isoformat(), "verdict": verdict})
+        run.params = {**(run.params or {}), "risk_events": events}
+
     async def _rebalance(
         self, session, run: StrategyRun, strategy: Strategy, user: User,
         spec: WeightSpec, provider: MarketDataProvider, account,
@@ -1040,6 +1082,9 @@ class PaperRunSupervisor:
         # engine actually holds, which is where rounding and scale-downs show.
         snapshot.actual_weights = await self._actual_weight_weights(
             session, provider, account, universe, marks
+        )
+        await self._record_risk_verdict(
+            session, run, day, snapshot.actual_weights
         )
         await self._event(
             session, run, strategy.user_id, StrategyEventType.REBALANCE,

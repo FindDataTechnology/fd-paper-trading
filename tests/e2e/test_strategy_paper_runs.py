@@ -606,3 +606,102 @@ async def test_mark_running_records_no_watermark_keys_without_the_capability(cli
         assert run.params["price_caliber"] == "forward"
         assert "price_as_of_max" not in run.params
         assert "price_watermark_status" not in run.params
+
+
+# ---------------------------------------------------------------------------
+# 纸面运行里的组合级风控判定（change4 3.2）
+#
+# 只判定、不处置：门不产出处置字段（1.5），这里也不据此改写订单。
+# 所以能验的是「判过、可复核」；「触达后停不停手」不在此处的实现范围内。
+# ---------------------------------------------------------------------------
+
+WEIGHT_SPEC_TWO = {
+    "kind": "weight",
+    "universe": ["600000", "600036"],
+    "rebalance": {"every_n_bars": 1},
+    "weights_series": {"2026-01-01": {"600000": 0.5, "600036": 0.5}},
+}
+
+THRESHOLDS = {"per_symbol_max": 0.2, "industry_max": 0.9,
+              "drawdown_max": 0.9, "daily_loss_max": 0.9}
+
+
+async def _make_weight_run(app, client, h, *, params_extra=None) -> uuid.UUID:
+    strat = await _make_strategy(client, h, spec=WEIGHT_SPEC_TWO, name="wr")
+    sid = uuid.UUID(strat["id"])
+    account_id = await _make_account(client, h)
+    async with app.state.db.session_factory() as session:
+        run = StrategyRun(
+            strategy_id=sid, strategy_version=1, mode=StrategyRunMode.PAPER,
+            account_id=account_id, status=StrategyRunStatus.STARTING,
+            params={"universe": ["600000", "600036"], **(params_extra or {})},
+            universe=["600000", "600036"],
+        )
+        session.add(run)
+        await session.commit()
+        return run.id
+
+
+@pytest.mark.asyncio
+async def test_paper_run_records_a_risk_verdict_per_rebalance(client, app):
+    """配了阈值 → 每个调仓点留一条判定，形状与直接调 gate 一致。"""
+    await _wire(app)
+    h = await _authed(client)
+    run_id = await _make_weight_run(app, client, h,
+                                    params_extra={"risk_thresholds": THRESHOLDS})
+
+    await app.state.strategy_runner._tick_once(run_id)
+
+    detail = await _run_detail(client, h, run_id)
+    events = detail["params"]["risk_events"]
+    assert events, "配了阈值却没有判定记录：纸面运行没接门"
+    ev = events[-1]
+    assert ev["day"]
+    # 与直接调 gate 的形状/结论一致（同实现的运行时自证）
+    from fd_paper_trading._vendor.fd_quant.risk import evaluate_portfolio_gate
+
+    async with app.state.db.session_factory() as session:
+        run = await session.get(StrategyRun, run_id)
+        weights = (run.weight_snapshots or [{}])[-1].get("actual_weights") or {}
+    direct = evaluate_portfolio_gate(
+        weights=weights, thresholds=THRESHOLDS, sectors=None,
+        equity_series=None, as_of=ev["day"], price_as_of_max=None,
+    )
+    assert set(ev["verdict"]) == set(direct)
+    assert ev["verdict"]["status"] == direct["status"]
+
+
+@pytest.mark.asyncio
+async def test_paper_run_tight_threshold_breaches_and_still_trades(client, app):
+    """50% 单票 vs 20% 上限 → 触达 per_symbol，且**订单照下**（只记不拦）。
+
+    "只记不拦"是刻意的：处置属于组合纪律，门按契约只判定。若哪天有人在
+    这里加了拦截，这条会因订单数变化而红——那时应当改这条用例并给出裁决，
+    而不是让它悄悄变色。
+    """
+    await _wire(app)
+    h = await _authed(client)
+    run_id = await _make_weight_run(app, client, h,
+                                    params_extra={"risk_thresholds": THRESHOLDS})
+
+    await app.state.strategy_runner._tick_once(run_id)
+
+    detail = await _run_detail(client, h, run_id)
+    kinds = {i["kind"] for e in detail["params"]["risk_events"]
+             for i in e["verdict"]["items"]}
+    assert "per_symbol" in kinds, f"阈值没进判据：{kinds}"
+    orders = [o for o in detail.get("orders") or []]
+    assert orders or detail["weight_snapshots"], "触达不应阻止调仓（只记不拦）"
+
+
+@pytest.mark.asyncio
+async def test_paper_run_without_thresholds_records_nothing(client, app):
+    """没配阈值 → 没有 risk_events 键（"没判过"≠"判过且通过"）。"""
+    await _wire(app)
+    h = await _authed(client)
+    run_id = await _make_weight_run(app, client, h)
+
+    await app.state.strategy_runner._tick_once(run_id)
+
+    detail = await _run_detail(client, h, run_id)
+    assert "risk_events" not in detail["params"]

@@ -298,6 +298,9 @@ class StrategyRunDetailOut(StrategyRunOut):
 class PaperRunRequest(BaseModel):
     """Start a live paper run on a paper account."""
     account_id: uuid.UUID
+    #: 组合级风控阈值（change4 3.2）。缺席 = 纸面运行不做组合判定，
+    #: 记录与行为都和接入前一致。**判定只留痕、不改写订单**。
+    risk_thresholds: RiskThresholdsRequest | None = None
 
 
 # ---------------------------------------------------------------------------

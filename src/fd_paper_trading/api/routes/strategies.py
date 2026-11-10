@@ -874,6 +874,12 @@ async def start_paper_run(
         params = {"universe": universe}
     else:
         params = {"symbol": strategy.spec.get("symbol")}
+    if payload.risk_thresholds is not None:
+        # 只有 weight 轨有"组合"，单标的轨的权重恒为 0/1，过门没有意义。
+        params["risk_thresholds"] = {
+            k: float(v) for k, v in
+            payload.risk_thresholds.model_dump(exclude_none=True).items()
+        }
     run = await StrategyRunRepository(session).create(
         StrategyRun(
             strategy_id=strategy.id,
