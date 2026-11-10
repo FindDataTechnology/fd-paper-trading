@@ -6,6 +6,7 @@ WebSocket so the tests stay fully async and transport-free.
 
 import asyncio
 import json
+import time
 import types
 
 import pytest
@@ -15,6 +16,21 @@ from fd_paper_trading.api.routes.ws import ws_endpoint, _AUTH_TIMEOUT  # noqa: F
 from fd_paper_trading.api.routes import ws as ws_module
 
 _DISCONNECT = object()
+
+
+async def _wait_until(pred, *, timeout: float = 2.0, step: float = 0.01) -> bool:
+    """等条件成立，而不是睡一个"通常够"的固定时长。
+
+    固定 sleep 在机器负载高时会假红（实测全量跑偶发一次：订阅还没注册完就
+    ``_emit_ticks()``，于是收不到 tick）。判据交给条件本身，超时给足 2 秒——
+    放宽只影响"多久判失败"，不影响判定。
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        await asyncio.sleep(step)
+    return pred()
 
 
 class FakeWebSocket:
@@ -97,9 +113,15 @@ async def test_ws_accepts_valid_token_then_subscribe_receives_tick(
     try:
         assert fake.accepted
         await fake.feed(json.dumps({"type": "subscribe", "symbol": "AAPL"}))
-        await asyncio.sleep(0.05)
+        # 等订阅真的注册上（不是"睡 50ms 通常够"）
+        assert await _wait_until(
+            lambda: any("AAPL" in c.subscribed
+                        for c in app.state.realtime._connections)
+        ), "subscribe 没有注册到连接上"
         await app.state.realtime._emit_ticks()
-        await asyncio.sleep(0.05)
+        assert await _wait_until(
+            lambda: any(e["type"] == "quote" for e in fake.sent)
+        ), "发了一次 tick 也没收到 quote"
         quotes = [e for e in fake.sent if e["type"] == "quote"]
         assert any(q["symbol"] == "AAPL" for q in quotes)
         assert "bid" in quotes[0] and "ask" in quotes[0]
@@ -112,16 +134,24 @@ async def test_ws_unsubscribe_stops_ticks(app, client, register, login):
     fake, task = await _connect(app, token)
     try:
         await fake.feed(json.dumps({"type": "subscribe", "symbol": "AAPL"}))
-        await asyncio.sleep(0.03)
+        assert await _wait_until(
+            lambda: any("AAPL" in c.subscribed
+                        for c in app.state.realtime._connections)
+        )
         await app.state.realtime._emit_ticks()
-        await asyncio.sleep(0.03)
-        assert any(e["type"] == "quote" for e in fake.sent)
+        assert await _wait_until(
+            lambda: any(e["type"] == "quote" for e in fake.sent)
+        )
 
         fake.sent.clear()
         await fake.feed(json.dumps({"type": "unsubscribe", "symbol": "AAPL"}))
-        await asyncio.sleep(0.03)
+        # 等退订真的生效（订阅集合里没有它了），再打一次 tick
+        assert await _wait_until(
+            lambda: not any("AAPL" in c.subscribed
+                            for c in app.state.realtime._connections)
+        ), "unsubscribe 没有生效"
         await app.state.realtime._emit_ticks()
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.02)   # 让可能发出的帧落地，才能断言"没有"
         assert not any(e["type"] == "quote" for e in fake.sent)
     finally:
         await _disconnect(fake, task)
