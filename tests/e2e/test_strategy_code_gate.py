@@ -86,7 +86,11 @@ async def test_code_strategy_allowed_and_backtests_when_enabled(client, app):
     run_id = r.json()["id"]
 
     # Poll to COMPLETED (sandbox subprocesses are slowish but sub-second total).
-    for _ in range(200):
+    #
+    # 30s 上限而非 10s：这条用例在跑全量时偶发假红（实测 1 次/两轮），原因是
+    # 沙箱子进程 + 后台回测任务与紧轮询抢同一个 SQLite 连接，机器负载高时
+    # 10s 窗口不够。窗口放宽只影响"多久判失败"，不影响"失败是否被判定"。
+    for _ in range(600):
         r = await client.get(f"/api/v1/strategy-runs/{run_id}", headers=h)
         d = r.json()
         if d["status"] in ("COMPLETED", "FAILED"):

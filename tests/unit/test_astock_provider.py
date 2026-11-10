@@ -503,3 +503,32 @@ def test_series_ref_for_bars_is_none_without_registry_identity():
     p = _provider(FakeReader())
     bars = [Bar(ts=1751000000, open=1, high=1, low=1, close=1, volume=1)]
     assert p.series_ref_for_bars("600036", bars) is None
+
+
+@pytest.mark.asyncio
+async def test_coverage_caliber_follows_the_declaration_not_the_constant():
+    """声明说 hfq，coverage 就得报 hfq——不能被模块常量 "forward" 盖住。
+
+    否则 `run.params["adjusted"]` 与 `price_series_ref.adjustment` 会互相矛盾，
+    而下游没有依据判断该信哪个（这正是"三路可比"要防的形态）。
+    """
+    class _HFQDecl:
+        adjustment = "hfq"
+        adjustment_anchor = "2026-07-10"
+        db_source = "astock_daily"
+
+    rows = [_bar_row("2026-07-08", 37, 38, 36, 37.7)]
+    p = _provider(FakeReader(bars=rows), registry_source_id="astock_daily")
+    p._decl = _HFQDecl()
+    p._decl_loaded = True
+    out = await p.get_bars_with_coverage("600036", "2026-07-08", "2026-07-08")
+    assert out["adjusted"] == "hfq"
+    assert out["series_ref"]["adjustment"] == "hfq"      # 两处一致
+
+
+@pytest.mark.asyncio
+async def test_coverage_caliber_falls_back_to_the_constant_without_registry():
+    rows = [_bar_row("2026-07-08", 37, 38, 36, 37.7)]
+    p = _provider(FakeReader(bars=rows))     # 无注册表 id → 无声明
+    out = await p.get_bars_with_coverage("600036", "2026-07-08", "2026-07-08")
+    assert out["adjusted"] == "forward"      # 退回已知事实，不是编造

@@ -220,6 +220,12 @@ class AstockMarketDataProvider(MarketDataProvider):
             self._decl = None
         return self._decl
 
+    def _declared_adjustment(self) -> str:
+        """本源的复权口径：有声明用声明，没有才退回已知常量。"""
+        decl = self._declaration()
+        declared = getattr(decl, "adjustment", None) if decl is not None else None
+        return declared or _ADJUSTED
+
     def series_ref_for_bars(self, symbol: str, bars) -> dict | None:
         """行情接口的序列引用（cheap 版，change1 需求「每个价格响应都带引用」）。
 
@@ -437,7 +443,10 @@ class AstockMarketDataProvider(MarketDataProvider):
             "market_closed": market_closed,
             "fill_failed": fill_failed,
             "fingerprint": _fingerprint(close_series),
-            "adjusted": _ADJUSTED,
+            # 口径以声明为真源：`_ADJUSTED` 只是"没有注册表时已知的事实"。
+            # 两者若各说各话，run.params["adjusted"] 与 price_series_ref.adjustment
+            # 会互相矛盾，而下游没法判断该信哪个。
+            "adjusted": self._declared_adjustment(),
             "source": self._source,
         }
         out.update(self._series_ref_facts(symbol, close_series, start_s, end_s))
