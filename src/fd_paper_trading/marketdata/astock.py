@@ -165,7 +165,7 @@ class AstockMarketDataProvider(MarketDataProvider):
 
     # ---- source watermark（能力方法，非必需接口）----
 
-    def source_watermark(self) -> dict | None:
+    async def source_watermark(self) -> dict | None:
         """本 provider 所钉源的实时水位（change1 task 6.5）。
         形状是 ``Watermark.to_dict()``：``{source_id, as_of, status, method,
         basket, lookback_days, detail}``。``as_of`` 为 ``None`` 时 ``status``
@@ -181,11 +181,7 @@ class AstockMarketDataProvider(MarketDataProvider):
         if not self._registry_source_id:
             return None
         try:
-            from fd_open_data_mcp.price_sources.registry import (  # type: ignore[import-not-found]
-                watermark_for,
-            )
-
-            mark = watermark_for(self._registry_source_id).to_dict()
+            mark = await asyncio.to_thread(self._registry_watermark)
         except Exception:  # noqa: BLE001 - 水位是尽力而为，绝不影响交易路径
             logger.warning(
                 "source_watermark(%s) unavailable; falling back to the provider's own max date",
@@ -208,7 +204,7 @@ class AstockMarketDataProvider(MarketDataProvider):
         # 结果带 `method`/`via` 标明来路，消费方（以及事后复盘）能分清"注册表水位"
         # 与"provider 自证水位"——两者不该长得一样。
         try:
-            as_of = self._max_bar_date_sync()
+            as_of = await self._max_bar_date()
         except Exception:  # noqa: BLE001
             logger.warning("source_watermark(%s): provider fallback failed",
                            self._registry_source_id, exc_info=True)
@@ -248,27 +244,13 @@ class AstockMarketDataProvider(MarketDataProvider):
         d = rows[0].get("d")
         return _date_str(d) if d is not None else None
 
-    def _max_bar_date_sync(self) -> str | None:
-        """同步包装：给 ``source_watermark``（同步接口）用。
+    def _registry_watermark(self) -> dict:
+        """注册表水位（阻塞调用：SQLAlchemy 同步会话，故由 `asyncio.to_thread` 包起来）。"""
+        from fd_open_data_mcp.price_sources.registry import (  # type: ignore[import-not-found]
+            watermark_for,
+        )
 
-        两种上下文都要能跑：
-        - 工线程里（生产：`_mark_running` 用 `asyncio.to_thread` 调本方法）→ 没有运行中
-          的事件循环，`asyncio.run` 直接用；
-        - 已有事件循环（单测、或哪天有人从 async 代码直接调）→ `asyncio.run` 会抛
-          `cannot be called from a running event loop`，此时改为**在独立线程里开自己的循环**。
-
-        这个分叉不写的话，同步接口在 async 上下文里会静默失效（异常被上层吞掉，
-        表现为"水位永远拿不到"）——正是本轮踩到的形态。
-        """
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self._max_bar_date())
-
-        import concurrent.futures as _cf
-
-        with _cf.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(lambda: asyncio.run(self._max_bar_date())).result()
+        return watermark_for(self._registry_source_id).to_dict()
 
     def _declaration(self):
         """本 provider 对应源的声明（缓存；拿不到返回 None）。

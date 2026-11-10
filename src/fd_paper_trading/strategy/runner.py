@@ -29,6 +29,7 @@ cancel tasks on exit.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import math
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -474,7 +475,14 @@ class PaperRunSupervisor:
                             "source_watermark", None)
                         if watermark_fn is not None:
                             try:
-                                watermark = await asyncio.to_thread(watermark_fn)
+                                # 能力方法可能是 async（真 provider：要在**本循环**里用
+                                # 已有的 asyncpg 连接池；丢进 to_thread 开新循环会得到
+                                # "connection was closed in the middle of operation"），
+                                # 也可能是 sync（测试替身/简单 provider）。两种都收：
+                                # 判 coroutine 再 await，否则当值用——不靠 try/except 猜。
+                                watermark = watermark_fn()
+                                if inspect.isawaitable(watermark):
+                                    watermark = await watermark
                             except Exception:  # noqa: BLE001 - 尽力而为
                                 watermark = None
                         probe_start, probe_end = caliber_probe_window(
