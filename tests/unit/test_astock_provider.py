@@ -55,6 +55,10 @@ class FakeReader:
             return [{"id": i, "code": c} for c, i in self.refs.items()]
         if s.startswith("select id, entity_type from entities"):
             return list(self.entities.get(args[0], []))
+        if s.startswith("select max(date) as d from semantic_observations_all"):
+            # 自证水位那条：返回本源最后一根 bar 的日期（夹具里就是 bars 的最大日期）
+            dates = sorted(str(r["date"])[:10] for r in self.bars) if self.bars else []
+            return [{"d": dates[-1]}] if dates else [{"d": None}]
         if s.startswith("select 1 as x from semantic_observations_all"):
             return [{"x": 1}] if args[0] in self.entities_with_data else []
         if s.startswith("select date, max(case when concept_id"):
@@ -532,3 +536,49 @@ async def test_coverage_caliber_falls_back_to_the_constant_without_registry():
     p = _provider(FakeReader(bars=rows))     # 无注册表 id → 无声明
     out = await p.get_bars_with_coverage("600036", "2026-07-08", "2026-07-08")
     assert out["adjusted"] == "forward"      # 退回已知事实，不是编造
+
+
+# --------------------------------- 注册表给不出水位时用本源自证（2026-11-10 实测）
+
+@pytest.mark.asyncio
+async def test_watermark_falls_back_to_the_sources_own_max_date(monkeypatch):
+    """生产实测：`watermark_for` 查的是本体库，federated_view 源的价格行在分片库，
+    于是 astock_daily 的水位恒为 no_data（detail「no observations since 2025-10-06」）。
+    那时必须用**本源自己的最后一根 bar**自证，否则水位锚点在产永远不启用。
+    """
+    rows = [_bar_row("2026-07-09", 10, 11, 9, 10.5),
+            _bar_row("2026-07-10", 10, 11, 9, 10.6)]
+    p = _provider(FakeReader(bars=rows), registry_source_id="astock_daily")
+    p._decl = _Decl()
+    p._decl_loaded = True
+
+    import fd_open_data_mcp.price_sources.registry as reg_mod
+    from fd_open_data_mcp.price_sources.watermark import Watermark
+    monkeypatch.setattr(reg_mod, "watermark_for", lambda sid, **_kw: Watermark(
+        source_id=sid, as_of=None, status="no_data", method="reference_basket",
+        basket=("600036",), lookback_days=400,
+        detail="no observations since 2025-10-06"))
+
+    got = p.source_watermark()
+    assert got["status"] == "ok"
+    assert got["as_of"] == "2026-07-10"          # 取自本源最后一根 bar
+    assert got["method"] == "provider_max_date"  # 来路可分，不冒充注册表水位
+    assert "no_data" in got["detail"]
+
+
+@pytest.mark.asyncio
+async def test_watermark_prefers_the_registry_when_it_answers(monkeypatch):
+    """注册表能答就用它（三路读同一对象的纪律），不要越位自证。"""
+    p = _provider(FakeReader(bars=[]), registry_source_id="astock_daily")
+    p._decl = _Decl()
+    p._decl_loaded = True
+
+    import fd_open_data_mcp.price_sources.registry as reg_mod
+    from fd_open_data_mcp.price_sources.watermark import Watermark
+    monkeypatch.setattr(reg_mod, "watermark_for", lambda sid, **_kw: Watermark(
+        source_id=sid, as_of="2026-07-10", status="ok", method="reference_basket",
+        basket=("600036",), lookback_days=400))
+
+    got = p.source_watermark()
+    assert got["status"] == "ok"
+    assert got["method"] == "reference_basket"   # 不是 provider_max_date

@@ -185,14 +185,90 @@ class AstockMarketDataProvider(MarketDataProvider):
                 watermark_for,
             )
 
-            return watermark_for(self._registry_source_id).to_dict()
+            mark = watermark_for(self._registry_source_id).to_dict()
         except Exception:  # noqa: BLE001 - 水位是尽力而为，绝不影响交易路径
             logger.warning(
-                "source_watermark(%s) unavailable; callers fall back to the fixed probe window",
+                "source_watermark(%s) unavailable; falling back to the provider's own max date",
                 self._registry_source_id,
                 exc_info=True,
             )
+            mark = None
+
+        if mark and mark.get("status") == "ok" and mark.get("as_of"):
+            return mark
+
+        # ── 注册表给不出 → 用本 provider 自己的数据自证（2026-11-10 实测的必要性）──
+        #
+        # `watermark_for` 查的是**本体库**（get_database() → fd_open_data），而
+        # federated_view 源的价格行在**分片库**里。实测生产：`astock_daily` 的水位恒为
+        # `status=no_data`、detail「no observations since 2025-10-06」——本体库自那时起
+        # 没有价格观测，于是水位锚点在产永远不会启用（只剩 400 天兜底）。
+        #
+        # 这里退回"问自己的库最后一根 bar 是哪天"：同一个源、同一批行，只是换了条通路。
+        # 结果带 `method`/`via` 标明来路，消费方（以及事后复盘）能分清"注册表水位"
+        # 与"provider 自证水位"——两者不该长得一样。
+        try:
+            as_of = self._max_bar_date_sync()
+        except Exception:  # noqa: BLE001
+            logger.warning("source_watermark(%s): provider fallback failed",
+                           self._registry_source_id, exc_info=True)
+            return mark  # 保留注册表那份（可能是 no_data/unreachable，语义仍正确）
+        if not as_of:
+            return mark
+        reason = (mark or {}).get("status") or "registry_unavailable"
+        return {
+            "source_id": self._registry_source_id,
+            "as_of": as_of,
+            "status": "ok",
+            "method": "provider_max_date",
+            "basket": [],
+            "lookback_days": 0,
+            "detail": f"registry watermark said {reason}; derived from the pinned source itself",
+        }
+
+    _REFERENCE_FOR_MAX_DATE = "600036"   # 与声明里的 reference_basket 主标的同码
+
+    async def _max_bar_date(self) -> str | None:
+        entity = await self._resolve_entity(self._REFERENCE_FOR_MAX_DATE)
+        if entity is None:
             return None
+        eid, etype = entity
+        concepts = await self._concepts(etype)
+        close_id = concepts.get("close")
+        if close_id is None:
+            return None
+        rows = await self._fetch(
+            "select max(date) as d from semantic_observations_all "
+            "where entity_id = $1 and concept_id = $2 and granularity = 'day' "
+            "and source_used = $3",
+            eid, close_id, self._source,
+        )
+        if not rows:
+            return None
+        d = rows[0].get("d")
+        return _date_str(d) if d is not None else None
+
+    def _max_bar_date_sync(self) -> str | None:
+        """同步包装：给 ``source_watermark``（同步接口）用。
+
+        两种上下文都要能跑：
+        - 工线程里（生产：`_mark_running` 用 `asyncio.to_thread` 调本方法）→ 没有运行中
+          的事件循环，`asyncio.run` 直接用；
+        - 已有事件循环（单测、或哪天有人从 async 代码直接调）→ `asyncio.run` 会抛
+          `cannot be called from a running event loop`，此时改为**在独立线程里开自己的循环**。
+
+        这个分叉不写的话，同步接口在 async 上下文里会静默失效（异常被上层吞掉，
+        表现为"水位永远拿不到"）——正是本轮踩到的形态。
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self._max_bar_date())
+
+        import concurrent.futures as _cf
+
+        with _cf.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(lambda: asyncio.run(self._max_bar_date())).result()
 
     def _declaration(self):
         """本 provider 对应源的声明（缓存；拿不到返回 None）。
