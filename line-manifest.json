@@ -1,7 +1,7 @@
 {
   "schema": "line-manifest/v1",
   "line": "paper-trading",
-  "public_base_url": "https://paper.finddatatech.cloud",
+  "public_base_url": "https://mcp.finddatatech.cloud/fd-paper-trading",
   "identity": {
     "issuer": "https://auth.finddatatech.cloud/oidc",
     "jwks_uri": "https://auth.finddatatech.cloud/oidc/jwks",
@@ -36,5 +36,6 @@
     "mcp": true,
     "account": true,
     "admin": false
-  }
+  },
+  "note": "公开入口只有注册处那条 discoverability 条目（`/fd-paper-trading` → mesh `http://cheap6.mesh.finddata.cn:31894/mcp`）：本线没有自己的公网域名，`paper.finddatatech.cloud` 不解析（DNS 无记录），初版清单误用了它，2026-11-12 改为注册处路径。逐用户消费必须走 mesh 直连——网关会剥掉调用方 Authorization（见 tool-surface.json 的 registry.consumption_note）。"
 }
