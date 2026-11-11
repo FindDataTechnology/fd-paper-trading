@@ -57,6 +57,9 @@ VENDORED_FILES = {
     "schemas/price-series-ref.schema.json": "schemas/price-series-ref.schema.json",
     # add-portfolio-intent-contract: 评级→权重的派生契约
     "schemas/portfolio-intent.schema.json": "schemas/portfolio-intent.schema.json",
+    # deepen-trading-benchmark-and-risk: 纸面下单的**意图契约**（形状 + 校验 + 对账三态）。
+    # 服务内下单时用它给每笔单出票——所以镜像的是契约本身；MCP 外壳留在 fd-quant。
+    "fd_quant/order_intent.py": "fd_quant/order_intent.py",
 }
 
 #: Hand-written glue under the vendor dir — pinned as a listing so the mirror is

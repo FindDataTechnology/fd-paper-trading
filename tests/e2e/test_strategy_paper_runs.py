@@ -748,3 +748,170 @@ async def test_paper_run_records_the_series_ref(client, app):
     for key in ("source_id", "adjustment", "as_of_max", "fingerprint"):
         assert ref[key], f"{key} 缺失"
     assert ref["source_id"] == "astock_daily"
+
+
+# ---------------------------------------------------------------------------
+# 下单意图票（spec `order-intent-export`）
+#
+# 这一层以前完全没有：订单只留 account/instrument/qty，事后答不出
+# "这笔单依据哪次运行、当时风控闸怎么判的"。服务内下单时出票，把这两件补上。
+# ---------------------------------------------------------------------------
+
+
+async def _tickets(app, run_id):
+    from fd_paper_trading.persistence.models import OrderIntentRecord
+    from sqlalchemy import select
+
+    async with app.state.db.session_factory() as session:
+        rows = (await session.execute(
+            select(OrderIntentRecord).where(OrderIntentRecord.run_id == run_id)
+            .order_by(OrderIntentRecord.created_at)
+        )).scalars().all()
+        return [
+            {
+                "intent_id": r.intent_id, "symbol": r.symbol, "side": r.side,
+                "quantity": r.quantity, "intent": r.intent,
+                "exportable": r.exportable, "blocked_reason": r.blocked_reason,
+                "order_id": r.order_id, "outcome": r.outcome, "as_of": r.as_of,
+            }
+            for r in rows
+        ]
+
+
+@pytest.mark.asyncio
+async def test_every_placed_order_gets_an_intent_ticket(client, app):
+    """下单即出票：票数=下单数，且票里写明依据哪次运行、闸怎么判的。"""
+    await _wire(app)
+    h = await _authed(client)
+    run_id = await _make_weight_run(app, client, h,
+                                    params_extra={"risk_thresholds": THRESHOLDS})
+
+    await app.state.strategy_runner._tick_once(run_id)
+
+    tickets = await _tickets(app, run_id)
+    assert tickets, "下了单却没有票：意图层没接上"
+    placed = [t for t in tickets if t["outcome"] == "placed"]
+    assert placed and all(t["order_id"] is not None for t in placed)
+    for t in tickets:
+        assert t["intent"]["derived_from"] == [f"strategy_run:{run_id}"]
+        assert t["intent"]["paper_only"] is True
+        assert t["intent"]["account_id"]
+        assert t["intent"]["risk_verdict"]["status"] in ("ok", "breached", "unavailable")
+        assert t["quantity"] > 0
+
+
+@pytest.mark.asyncio
+async def test_ticket_quotes_the_verdict_of_that_rebalance(client, app):
+    """票里的判定必须与同一天记进 run.params 的那条**逐字相同**（不是另算一份）。"""
+    await _wire(app)
+    h = await _authed(client)
+    run_id = await _make_weight_run(app, client, h,
+                                    params_extra={"risk_thresholds": THRESHOLDS})
+
+    await app.state.strategy_runner._tick_once(run_id)
+
+    detail = await _run_detail(client, h, run_id)
+    by_day = {e["day"]: e["verdict"] for e in detail["params"]["risk_events"]}
+    for t in await _tickets(app, run_id):
+        assert t["intent"]["risk_verdict"] == by_day[t["as_of"].isoformat()]
+
+
+@pytest.mark.asyncio
+async def test_tight_threshold_marks_the_ticket_as_not_exportable(client, app):
+    """50% 单票 vs 20% 上限 → 票照记，但 `exportable=false` 并写明触达了什么。
+
+    这条是这张票的全部价值所在：**它让"这笔单按契约本来导不出去"留痕**。
+    如果只在闸通过时才出票，触达的那些单会从审计面上消失。
+    """
+    await _wire(app)
+    h = await _authed(client)
+    run_id = await _make_weight_run(app, client, h,
+                                    params_extra={"risk_thresholds": THRESHOLDS})
+
+    await app.state.strategy_runner._tick_once(run_id)
+
+    tickets = await _tickets(app, run_id)
+    assert tickets
+    assert all(t["exportable"] is False for t in tickets)
+    assert all("breached" in (t["blocked_reason"] or "") for t in tickets)
+
+
+@pytest.mark.asyncio
+async def test_no_thresholds_means_unavailable_not_exportable(client, app):
+    """没配阈值 → 票里写 `unavailable` 并点名缺的四项，而不是什么都不记。"""
+    await _wire(app)
+    h = await _authed(client)
+    run_id = await _make_weight_run(app, client, h)
+
+    await app.state.strategy_runner._tick_once(run_id)
+
+    tickets = await _tickets(app, run_id)
+    assert tickets
+    for t in tickets:
+        assert t["intent"]["risk_verdict"]["status"] == "unavailable"
+        assert set(t["intent"]["risk_verdict"]["inputs"]["missing"]) == {
+            "per_symbol_max", "industry_max", "drawdown_max", "daily_loss_max"}
+        assert t["exportable"] is False
+        assert "unavailable" in (t["blocked_reason"] or "")
+
+
+@pytest.mark.asyncio
+async def test_tickets_pass_the_contract_as_recorded(client, app):
+    """落库的票必须能过契约校验——"我记了一张票"与"它是张合法票"是两件事。"""
+    from fd_paper_trading._vendor.fd_quant.order_intent import check_order_intent
+
+    await _wire(app)
+    h = await _authed(client)
+    run_id = await _make_weight_run(app, client, h,
+                                    params_extra={"risk_thresholds": THRESHOLDS})
+
+    await app.state.strategy_runner._tick_once(run_id)
+
+    for t in await _tickets(app, run_id):
+        assert check_order_intent(t["intent"]) == []
+
+
+@pytest.mark.asyncio
+async def test_a_committed_ticket_carries_the_order_it_became(client, app):
+    """票与单可对账：`order_id` 指向真实订单行（不是随手编的 uuid）。"""
+    from fd_paper_trading.persistence.models import Order
+    from sqlalchemy import select
+
+    await _wire(app)
+    h = await _authed(client)
+    run_id = await _make_weight_run(app, client, h,
+                                    params_extra={"risk_thresholds": THRESHOLDS})
+
+    await app.state.strategy_runner._tick_once(run_id)
+
+    placed = [t for t in await _tickets(app, run_id) if t["outcome"] == "placed"]
+    assert placed
+    async with app.state.db.session_factory() as session:
+        for t in placed:
+            order = await session.get(Order, t["order_id"])
+            assert order is not None
+            assert order.strategy_run_id == run_id
+            assert order.symbol == t["symbol"]
+
+
+@pytest.mark.asyncio
+async def test_run_detail_exposes_the_tickets(client, app):
+    """票要有读出口：`GET /strategy-runs/{id}` 里能拿到，且与库内逐条一致。
+
+    只写库不给出口，等于"记了但看不见"——与本 spec 要解决的形态正相反。
+    """
+    await _wire(app)
+    h = await _authed(client)
+    run_id = await _make_weight_run(app, client, h,
+                                    params_extra={"risk_thresholds": THRESHOLDS})
+
+    await app.state.strategy_runner._tick_once(run_id)
+
+    detail = await _run_detail(client, h, run_id)
+    exposed = detail.get("order_intents") or []
+    stored = await _tickets(app, run_id)
+    assert len(exposed) == len(stored) > 0
+    assert [str(e["intent_id"]) for e in exposed] == [str(s["intent_id"]) for s in stored]
+    for e in exposed:
+        assert e["intent"]["paper_only"] is True
+        assert "exportable" in e and "outcome" in e

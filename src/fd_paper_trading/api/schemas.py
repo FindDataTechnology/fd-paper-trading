@@ -290,9 +290,35 @@ class StrategyEventOut(BaseModel):
     data: dict | None = None
 
 
+class OrderIntentOut(BaseModel):
+    """一张下单意图票（spec `order-intent-export`）。
+
+    `intent` 是契约实例的逐字快照（`derived_from` / `risk_verdict` / `paper_only`）；
+    `exportable` 是**记录侧**判断——按契约这张票导不导得出去。两者刻意分开：
+    契约实例回答"当时依据什么"，`exportable` 回答"按规矩它该不该出门"。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    intent_id: uuid.UUID
+    as_of: date
+    symbol: str
+    side: str
+    quantity: Decimal
+    order_type: str
+    intent: dict
+    exportable: bool
+    blocked_reason: str | None = None
+    order_id: uuid.UUID | None = None
+    outcome: str
+
+
 class StrategyRunDetailOut(StrategyRunOut):
     equity_points: list[EquityPointOut] = []
     events: list[StrategyEventOut] = []
+    #: 这次运行产生的意图票，与订单对账（`outcome` + `order_id`）。
+    #: 空数组 = 这次运行没产生票（例如还没到调仓点），不是"查不到"。
+    order_intents: list[OrderIntentOut] = []
 
 
 class PaperRunRequest(BaseModel):

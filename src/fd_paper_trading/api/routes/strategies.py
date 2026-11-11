@@ -65,6 +65,7 @@ from ..._vendor.fd_quant.contracts.models import check_price_series_ref
 from ..errors import APIError
 from ..schemas import (
     BacktestRequest,
+    OrderIntentOut,
     PaperRunRequest,
     StrategyCreate,
     StrategyOut,
@@ -824,6 +825,19 @@ async def get_strategy_run(
         raise APIError("not_found", "Strategy run not found", 404)
     out = StrategyRunDetailOut.model_validate(run)
     out.equity_points = sorted(out.equity_points, key=lambda p: p.date)
+    # 意图票：这次运行"依据什么下的单"（spec `order-intent-export`）。
+    # 按 as_of 升序，与事件流同向，读者能沿调仓点往下看。
+    # 空数组 = 这次运行没有票（还没到调仓点），**不是**"查不到"。
+    from sqlalchemy import select
+
+    from ...persistence.models import OrderIntentRecord
+
+    rows = (await session.execute(
+        select(OrderIntentRecord)
+        .where(OrderIntentRecord.run_id == run_id)
+        .order_by(OrderIntentRecord.as_of, OrderIntentRecord.created_at)
+    )).scalars().all()
+    out.order_intents = [OrderIntentOut.model_validate(r) for r in rows]
     return out
 
 

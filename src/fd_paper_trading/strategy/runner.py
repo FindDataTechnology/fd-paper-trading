@@ -42,6 +42,7 @@ from ..execution import OrderRejected, PaperExecutionService
 from ..marketdata import MarketDataProvider
 from ..persistence.models import (
     ACTIVE_RUN_STATUSES,
+    OrderIntentRecord,
     Strategy,
     StrategyEquityPoint,
     StrategyEventType,
@@ -973,8 +974,8 @@ class PaperRunSupervisor:
 
 
     async def _record_risk_verdict(self, session, run: StrategyRun, day: date,
-                                   actual_weights: Mapping[str, float] | None) -> None:
-        """组合级风控判定随 run 留痕（change4 3.2）。
+                                   actual_weights: Mapping[str, float] | None) -> dict | None:
+        """组合级风控判定随 run 留痕（change4 3.2）。返回本次判定（没判则为 None）。
 
         **只判定、不处置**：门按契约不产出任何"清仓/减仓"字段（change4 1.5），
         这里也不据此改写订单——触达之后要不要停手属于组合纪律，不是实现方的默认值。
@@ -982,10 +983,14 @@ class PaperRunSupervisor:
 
         没配阈值就什么都不做（`risk_thresholds` 缺席 → 键不出现），
         而不是记一条"ok"——"没判过"与"判过且通过"必须能分开。
+
+        返回值供下单票（`_record_order_intents`）引用：票要写"这笔单当时过没过闸"，
+        而判定是在**实际持仓**上算的、必在下单之后，所以只能由这里回传，
+        不能让票自己去猜一个。
         """
         thresholds = (run.params or {}).get("risk_thresholds")
         if not thresholds:
-            return
+            return None
         from .._vendor.fd_quant.risk import evaluate_portfolio_gate
 
         # 只判真实持仓：CASH 是现金占比，不是可风控的标的（把它当标的会让
@@ -993,7 +998,7 @@ class PaperRunSupervisor:
         weights = {sym: float(w) for sym, w in (actual_weights or {}).items()
                    if sym != "CASH"}
         if not weights:
-            return
+            return None
         points = await StrategyRunRepository(session).list_equity_points(run.id)
         equity_series = [(p.date.isoformat(), float(p.equity)) for p in points]
         try:
@@ -1008,10 +1013,11 @@ class PaperRunSupervisor:
         except Exception:  # noqa: BLE001 - 判定是留痕，绝不让交易 tick 失败
             logger.warning("risk verdict failed for run %s on %s", run.id, day,
                            exc_info=True)
-            return
+            return None
         events = list((run.params or {}).get("risk_events") or [])
         events.append({"day": day.isoformat(), "verdict": verdict})
         run.params = {**(run.params or {}), "risk_events": events}
+        return verdict
 
     async def _rebalance(
         self, session, run: StrategyRun, strategy: Strategy, user: User,
@@ -1107,7 +1113,7 @@ class PaperRunSupervisor:
             account.cash_balance, positions, marks, stale, target_symbols, day,
             buy_prices, sell_prices,
         )
-        placed = await self._place_weight_instructions(
+        placed, outcomes = await self._place_weight_instructions(
             session, run, strategy, user, account, instructions, day, placed,
         )
         snapshot.instructions = instructions
@@ -1116,8 +1122,13 @@ class PaperRunSupervisor:
         snapshot.actual_weights = await self._actual_weight_weights(
             session, provider, account, universe, marks
         )
-        await self._record_risk_verdict(
+        verdict = await self._record_risk_verdict(
             session, run, day, snapshot.actual_weights
+        )
+        # 出票（spec `order-intent-export`）：每笔真实下达/被拒/被上限截住的指令
+        # 记一张意图票，写明"依据哪次运行、当时闸怎么判的"。**不影响下单**。
+        await self._record_order_intents(
+            session, run, account, day, outcomes, verdict,
         )
         await self._event(
             session, run, strategy.user_id, StrategyEventType.REBALANCE,
@@ -1127,7 +1138,8 @@ class PaperRunSupervisor:
             {"date": day.isoformat(), "universe": list(universe),
              "target_weights": dict(snapshot.target_weights),
              "cash_floor": snapshot.cash_floor,
-             "instruction_count": len(instructions)},
+             "instruction_count": len(instructions),
+             "order_intents": len(outcomes)},
         )
         return placed, snapshot, [{"date": day.isoformat(), "symbol": s} for s in stale]
 
@@ -1199,7 +1211,7 @@ class PaperRunSupervisor:
     async def _place_weight_instructions(
         self, session, run: StrategyRun, strategy: Strategy, user: User,
         account, instructions: Sequence[Instruction], day: date, placed: int,
-    ) -> int:
+    ) -> tuple[int, list[dict]]:
         """Place one MARKET order per executable instruction; enforce the cap.
 
         Quantities are already whole shares, so what is left to the service is
@@ -1214,9 +1226,16 @@ class PaperRunSupervisor:
         capped rebalance reads the same in the run's event log either way. A
         skipped-by-rule instruction (a halted symbol) is logged too: it never
         reaches the service, which is exactly the fact worth naming.
+
+        Returns ``(placed, outcomes)``. ``outcomes`` carries one entry per
+        instruction that **became a real decision** (placed / rejected / capped)
+        so the caller can write an intent ticket for it; an instruction skipped
+        before sizing (halted symbol, zero quantity) is not an order and gets no
+        ticket — it is already named in the SKIP event instead.
         """
         service: PaperExecutionService = self.app.state.execution_service
         max_per_day = group_config(user, "max_orders_per_day")
+        outcomes: list[dict] = []
         for instruction in instructions:
             if instruction.skipped or instruction.quantity <= 0:
                 await self._event(
@@ -1238,6 +1257,10 @@ class PaperRunSupervisor:
                      "quantity": str(instruction.quantity),
                      "requested_quantity": str(instruction.requested_quantity)},
                 )
+                outcomes.append({
+                    "instruction": instruction, "outcome": "capped", "order_id": None,
+                    "reason": f"daily order cap {max_per_day} reached",
+                })
                 continue
             try:
                 order = await service.place_order(
@@ -1253,8 +1276,16 @@ class PaperRunSupervisor:
                      "symbol": instruction.symbol, "side": instruction.side,
                      "quantity": str(instruction.quantity)},
                 )
+                outcomes.append({
+                    "instruction": instruction, "outcome": "rejected", "order_id": None,
+                    "reason": exc.message,
+                })
                 continue
             placed += 1
+            outcomes.append({
+                "instruction": instruction, "outcome": "placed", "order_id": order.id,
+                "reason": None,
+            })
             await self._event(
                 session, run, strategy.user_id, StrategyEventType.ORDER,
                 f"placed {instruction.side} {instruction.quantity} "
@@ -1262,7 +1293,100 @@ class PaperRunSupervisor:
                 {"date": day.isoformat(), "order_id": str(order.id),
                  "status": order.status, "order_type": order.order_type},
             )
-        return placed
+        return placed, outcomes
+
+    async def _record_order_intents(
+        self, session, run: StrategyRun, account, day: date,
+        outcomes: Sequence[dict], verdict: Mapping | None,
+    ) -> None:
+        """把这次调仓的下单决定写成意图票（spec `order-intent-export`）。
+
+        三件事刻意分开，否则这张票会撒谎：
+
+        1. **票照记，不管闸过没过**。`exportable` 按契约判（`status == "ok"` 才为真），
+           不因为"反正没拦"就把触达/不可用记成能导出。若不记触达的票，
+           "这笔单本不该下"这条事实就消失了——而它正是这张票存在的理由。
+        2. **阈值没配 = 不可用，不是"没判过所以放行"**。契约要求缺阈值时判据不可用，
+           这里如实写 `status="unavailable"` 并点名缺哪四项。
+        3. **出票失败绝不影响交易 tick**：票是留痕，不是交易的一部分。
+        """
+        if not outcomes:
+            return
+        from .._vendor.fd_quant.order_intent import check_order_intent
+
+        if verdict is None:
+            risk_verdict = {
+                "status": "unavailable",
+                "items": [],
+                "inputs": {
+                    "missing": ["per_symbol_max", "industry_max", "drawdown_max",
+                                "daily_loss_max"],
+                    "reason": "no thresholds configured for this run",
+                },
+            }
+        else:
+            risk_verdict = dict(verdict)
+        status = risk_verdict.get("status")
+        exportable = status == "ok"
+        if exportable:
+            blocked_reason = None
+        elif status == "unavailable":
+            missing = (risk_verdict.get("inputs") or {}).get("missing")
+            blocked_reason = f"risk gate unavailable (missing: {missing})"
+        else:
+            blocked_reason = (
+                "risk gate breached: "
+                + ",".join(str(i.get("kind")) for i in (risk_verdict.get("items") or []))
+            )
+
+        for item in outcomes:
+            instruction: Instruction = item["instruction"]
+            intent_id = uuid.uuid4()
+            payload = {
+                "schema_version": "1",
+                "intent_id": str(intent_id),
+                "as_of": day.isoformat(),
+                "account_id": str(account.id),
+                "symbol": instruction.symbol,
+                "side": instruction.side.lower(),
+                "order_type": "market",
+                "quantity": float(instruction.quantity),
+                # 出处 = 这次策略运行（`strategy_run:<id>`）：服务内能解析的也只有它。
+                # 期次由本行的 as_of 承担，不塞进 derived_from——塞进去就成了
+                # "一条永远解析不到的出处"，而出处不可解析等于没有出处。
+                "derived_from": [f"strategy_run:{run.id}"],
+                "risk_verdict": risk_verdict,
+                # 服务内不校验 producer 对位（那是账本的规矩），这里只记产出方。
+                "producer": {"pack": "fd-paper-trading", "skill": "strategy-runner"},
+                "paper_only": True,
+            }
+            errs = check_order_intent(payload)
+            if errs:
+                logger.warning(
+                    "order intent refused by contract for run %s on %s (%s): %s",
+                    run.id, day, instruction.symbol, errs[0],
+                )
+                continue
+            session.add(OrderIntentRecord(
+                intent_id=intent_id,
+                run_id=run.id,
+                account_id=account.id,
+                as_of=day,
+                symbol=instruction.symbol,
+                side=instruction.side.lower(),
+                quantity=instruction.quantity,
+                order_type="market",
+                intent=payload,
+                exportable=exportable,
+                blocked_reason=blocked_reason,
+                order_id=item["order_id"],
+                outcome=item["outcome"],
+            ))
+        try:
+            await session.flush()
+        except Exception:  # noqa: BLE001 - 出票是留痕，绝不让交易 tick 失败
+            logger.warning("order intent write failed for run %s on %s", run.id, day,
+                           exc_info=True)
 
     async def _snapshot_weight_equity(
         self, session, run: StrategyRun, provider: MarketDataProvider, account,

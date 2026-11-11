@@ -4,7 +4,7 @@
   "upstream_package": "fd-quant",
   "upstream_version": "0.1.0",
   "upstream_paths_hint": "fd-quant/{fd_quant/contracts/models.py,schemas/*.json}",
-  "pinned_at": "2026-11-10",
+  "pinned_at": "2026-11-11",
   "required_api": [
     "SUPPORTED_SCHEMA_VERSION",
     "WEIGHT_SUM_TOLERANCE",
@@ -69,6 +69,12 @@
       "upstream": "schemas/portfolio-intent.schema.json",
       "bytes": 6079,
       "sha256": "553889c2a9f0d488b3d06d6501d93150fe10a019821ea241b01a8ed1f6c16e72"
+    },
+    {
+      "vendored": "fd_quant/order_intent.py",
+      "upstream": "fd_quant/order_intent.py",
+      "bytes": 12161,
+      "sha256": "1b762b749e63c7ef3a09adc6028ea67682246df7b2e8a8b4709b1bb78f38401a"
     }
   ]
 }

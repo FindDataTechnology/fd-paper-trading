@@ -459,3 +459,47 @@ class StrategyEventType:
     # which is absent from the order stream rather than refused by it.
     REBALANCE = "rebalance"        # a weight run reached a rebalance point
     SKIP = "skip"                  # an instruction was skipped before placing
+
+
+class OrderIntentRecord(Base):
+    """纸面下单的「意图票」（spec `order-intent-export`）。
+
+    为什么单独一张表而不是往 orders 上加列：票记的是**决定**（依据哪一期权重、
+    当时风控闸怎么判的），单记的是**动作**（成交了什么）。两者生命周期不同——
+    一张票可能没有对应的单（被拒/被当日上限截住），也可能是同一次调仓里多张票
+    指向同一条策略运行。混在一张表里，任何"按单统计"的查询都会被票的行数污染。
+
+    `intent` 列存契约实例（`OrderIntent.to_dict()` 的逐字快照）——与账本同一手法：
+    契约变了也能读回当时的形状。`exportable` / `blocked_reason` 是**记录侧的判断**，
+    不是契约字段（契约不认未知字段，硬塞会让校验绿不了）。
+    """
+
+    __tablename__ = "order_intents"
+
+    intent_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    #: 票来自哪一次策略运行与哪一期权重（`derived_from` 的落地形态）。
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("strategy_runs.id", ondelete="CASCADE"), index=True
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    as_of: Mapped[date] = mapped_column(Date, index=True)
+    symbol: Mapped[str] = mapped_column(String(40), index=True)
+    side: Mapped[str] = mapped_column(String(8))                  # buy / sell
+    quantity: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    order_type: Mapped[str] = mapped_column(String(8), default="market")
+    #: 契约实例的逐字快照（含 derived_from / risk_verdict / paper_only）。
+    intent: Mapped[dict] = mapped_column(JSONB)
+    #: 按契约这笔票导不导得出去。`risk_verdict.status != "ok"` → False。
+    #: **票照记**：不记就看不见"这笔单本不该下"，那才是真正要暴露的事实。
+    exportable: Mapped[bool] = mapped_column(Boolean, default=False)
+    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 对应成交动作：下单成功指向 `orders.id`；被拒/被上限截住时为空并留原因。
+    order_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("orders.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    outcome: Mapped[str] = mapped_column(String(20))   # placed / rejected / capped / skipped
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
