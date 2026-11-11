@@ -8,9 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...auth.dependencies import get_current_user, get_session
 from ...execution import OrderRejected, PaperExecutionService
 from ...persistence.models import User
-from ...persistence.repositories import AccountRepository, OrderRepository
+from ...persistence.repositories import (
+    AccountRepository,
+    FillRepository,
+    OrderRepository,
+)
 from ..errors import APIError
-from ..schemas import OrderCreate, OrderOut
+from ..schemas import FillOut, OrderCreate, OrderOut
 
 router = APIRouter(tags=["orders"])
 
@@ -110,3 +114,26 @@ async def get_order(
     if order is None:
         raise APIError("not_found", "Order not found", 404)
     return order
+
+
+@router.get("/accounts/{account_id}/fills", response_model=list[FillOut])
+async def list_account_fills(
+    account_id: uuid.UUID,
+    limit: int = 100,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[FillOut]:
+    """账户级成交流水（按时间倒序）。
+
+    为什么单开一条：`GET /orders/{id}` 里已经带 `fills`，但那是**逐单**视角——
+    答不了"这个账户这两天到底成交了什么、每笔什么价位"。`FillRepository.list_for_account`
+    早就写好了，却一直没有调用方；这条把它接上，而不是另写一份查询。
+
+    账户归属在仓储的 SQL 里判（`Account.user_id = :user_id`）：别人的账户 id
+    在此处得到的是空列表，而不是 403——**不确认存在性**，与 orders 的 404 口径
+    有意不同（此处不构成按 id 探测他人账户的信号）。
+    """
+    if limit < 1 or limit > 1000:
+        raise APIError("invalid_limit", "limit must be between 1 and 1000", 400)
+    rows = await FillRepository(session).list_for_account(account_id, user.id)
+    return [FillOut.model_validate(f) for f in rows[:limit]]
