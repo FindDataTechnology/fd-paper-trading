@@ -1,0 +1,40 @@
+{
+  "schema": "line-manifest/v1",
+  "line": "paper-trading",
+  "public_base_url": "https://paper.finddatatech.cloud",
+  "identity": {
+    "issuer": "https://auth.finddatatech.cloud/oidc",
+    "jwks_uri": "https://auth.finddatatech.cloud/oidc/jwks",
+    "jit_policy": "off"
+  },
+  "auth_tracks": [
+    {
+      "kind": "line-native",
+      "name": "fdt-token",
+      "accepts": "line-native-key",
+      "fallback": true
+    },
+    {
+      "kind": "customer-key",
+      "accepts": "ciyuan-sk",
+      "fallback": false,
+      "enforced": false,
+      "migration_task": "converge-line-identity-and-keys#8.3"
+    }
+  ],
+  "scopes": [
+    "line:read",
+    "line:write"
+  ],
+  "billing": {
+    "plane": "own",
+    "evidence_path": "src/fd_paper_trading/execution",
+    "note": "今天的事实：身份与账本都在本服务侧（见 tool-surface.json 的 registry.consumption_note）。词元平面是迁移目标，不是现状——所以这里写 own 而不是 ciyuan；目标记在 auth_tracks 的 customer-key 轨（enforced:false + migration_task）。",
+    "migration_task": "converge-line-identity-and-keys#8.3"
+  },
+  "surfaces": {
+    "mcp": true,
+    "account": true,
+    "admin": false
+  }
+}
