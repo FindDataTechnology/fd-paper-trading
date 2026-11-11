@@ -59,16 +59,28 @@ async def main() -> int:
     print(f"   window: {start}..{END} (decision {decision}, rebalances every 10 bars)")
     print(f"   rebalance dates: {len(rebalance_dates)}")
     result = replay_weights(spec, bars_by_symbol, Decimal("100000"))
-    trades = sum(len(s.instructions) for s in result.snapshots)
-    print(f"   status: COMPLETED, trades={trades}, "
+    # 指令数 ≠ 成交数：`snapshots[*].instructions` 含 `skipped=True`（停牌/无价）
+    # 与数量被约束压到 0 的项，把它们算成"成交"会让闸在零成交时照样 PASS。
+    # spec 要的是「成交数 > 0」，成交数只有一个权威来源：`stats["trade_count"]`
+    # （engine 侧 = 非 skipped 且 quantity > 0 的指令数）。两个数都打印，
+    # 闸只认后者。
+    instructions = sum(len(s.instructions) for s in result.snapshots)
+    skipped = sum(1 for s in result.snapshots for i in s.instructions if i.skipped)
+    filled = int(result.stats.get("trade_count") or 0)
+    assert filled <= instructions, (
+        f"trade_count={filled} 超过指令数 {instructions}：统计口径不可信"
+    )
+    print(f"   status: COMPLETED, instructions={instructions} "
+          f"(skipped={skipped}), filled={filled}, "
           f"final_equity={result.stats.get('final_equity')}")
     print(f"   stats: {result.stats}")
     for s in result.snapshots[:3]:
         print(f"   snapshot {s.day}: target={dict(list(s.target_weights.items())[:3])}"
               f"{' effective=' + str(dict(list(s.effective_weights.items())[:3])) if s.effective_weights else ''}"
               f" instructions={len(s.instructions)}")
-    ok = trades > 0
-    print(f"{'PASS' if ok else 'FAIL'}: weight backtest COMPLETED with trades > 0")
+    ok = filled > 0
+    print(f"{'PASS' if ok else 'FAIL'}: weight backtest COMPLETED with "
+          f"filled trades > 0 (filled={filled}, instructions={instructions})")
     return 0 if ok else 1
 
 

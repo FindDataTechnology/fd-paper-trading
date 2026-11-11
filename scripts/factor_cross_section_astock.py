@@ -328,15 +328,25 @@ async def run_weight_backtest(dsn: str, top_codes: list[str], decision_date: str
         weights_series={d: dict(weights) for d in rebalance_dates},
     )
     result = replay_weights(spec, bars_by_symbol, Decimal("100000"))
-    trades = sum(len(s.instructions) for s in result.snapshots)
+    # 指令数 ≠ 成交数（同 weight_backtest_topN.py 的说明）：`instructions` 含
+    # `skipped=True` 与数量被压到 0 的项；spec 2.3 要的是「成交数 > 0」，
+    # 权威来源是 `stats["trade_count"]`。两个数都打印，闸只认成交数。
+    instructions = sum(len(s.instructions) for s in result.snapshots)
+    skipped = sum(1 for s in result.snapshots for i in s.instructions if i.skipped)
+    filled = int(result.stats.get("trade_count") or 0)
+    assert filled <= instructions, (
+        f"trade_count={filled} 超过指令数 {instructions}：统计口径不可信"
+    )
     print("\n== 2.3 weight-mode backtest REAL ENGINE execution ==")
-    print(f"   status: COMPLETED (no exception), trades={trades}, "
+    print(f"   status: COMPLETED (no exception), instructions={instructions} "
+          f"(skipped={skipped}), filled={filled}, "
           f"final_equity={result.stats.get('final_equity')}")
     print(f"   stats: {result.stats}")
     print(f"   snapshots: {len(result.snapshots)} rebalances, "
           f"universe={len(codes)} names")
-    ok = trades > 0
-    print(f"{'PASS' if ok else 'FAIL'}: weight backtest executed with trades > 0")
+    ok = filled > 0
+    print(f"{'PASS' if ok else 'FAIL'}: weight backtest executed with "
+          f"filled trades > 0 (filled={filled}, instructions={instructions})")
     return 0 if ok else 1
 
 

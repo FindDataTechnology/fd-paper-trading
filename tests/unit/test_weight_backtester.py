@@ -476,3 +476,42 @@ def test_walk_forward_weight_splits_and_stitches():
     assert all(
         isinstance(s.actual_weights, dict) for s in [w1, w2] if hasattr(w1, "actual_weights")
     ) or True
+
+
+def test_instructions_positive_while_trade_count_zero() -> None:
+    """"指令数 > 0" 不等于 "成交数 > 0"——验收闸必须用 trade_count。
+
+    引擎把 skipped（停牌/无价）与被现金压到零的指令都构造成
+    ``quantity=0``（真实意图在 ``requested_quantity``），但仍会**追加进
+    ``snapshot.instructions``**。于是一轮里可以出现"指令 5 条、成交 0 笔"。
+
+    `factor_cross_section_astock.py` 与 `weight_backtest_topN.py` 原先用
+    ``sum(len(s.instructions)) > 0`` 当闸（spec 2.3 要的是「成交数 > 0」），
+    在上述形态下会假绿。本测试把底层事实钉住：指令数可以与成交数背离。
+    """
+    # B 一根 bar 都没有 → 每次调仓对 B 都产出 quantity=0 的 skipped 指令，
+    # 而成交只来自 A。若把目标全给 B，则指令 >0、成交 =0。
+    spec = _spec(universe=["A", "B"], rebalance={"every_n_bars": 1},
+                 weights_series={
+                     "2026-01-01": {"A": 0.0, "B": 0.90},
+                     "2026-01-02": {"A": 0.0, "B": 0.90},
+                     "2026-01-03": {"A": 0.0, "B": 0.90},
+                 })
+    res = replay_weights(
+        spec,
+        {"A": [_bar(1, "10.0"), _bar(2, "10.0"), _bar(3, "10.0")], "B": []},
+        Decimal(100000),
+    )
+    instructions = [i for s in res.snapshots for i in s.instructions]
+    filled = res.stats["trade_count"]
+
+    assert instructions, "场景应产出指令，否则证明不了判据会假绿"
+    assert all(i.quantity == 0 for i in instructions), (
+        "引擎应把无价/被压的指令构造成 quantity=0"
+    )
+    assert filled == 0, (
+        f"零成交时 trade_count 必须是 0，实际 {filled}；"
+        "若把指令数当成交数，验收闸会假绿"
+    )
+    # 这正是旧判据会误判的形态：指令数 > 0，但成交数 = 0。
+    assert len(instructions) > 0 and filled == 0
