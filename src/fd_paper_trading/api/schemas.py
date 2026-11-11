@@ -311,6 +311,9 @@ class OrderIntentOut(BaseModel):
     blocked_reason: str | None = None
     order_id: uuid.UUID | None = None
     outcome: str
+    #: 未成交原因（被拒文案 / 被当日上限截住）；成交时为 null。
+    #: 与 `blocked_reason` 分开：后者答"按风控契约该不该出门"。
+    outcome_reason: str | None = None
 
 
 class StrategyRunDetailOut(StrategyRunOut):

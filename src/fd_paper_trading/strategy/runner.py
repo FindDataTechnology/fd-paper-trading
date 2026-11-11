@@ -189,6 +189,18 @@ def _weight_weights(
     return out
 
 
+def _signal_instruction(symbol: str, signal):
+    """把单标的信号包成与 `Instruction` 同形的记录体。
+
+    出票只需要 symbol / side / quantity（`_record_order_intents` 的全部依赖），
+    而 `Instruction` 还要求 price——单标的信号在成交前没有价格，硬造一个会撒谎。
+    所以用一个轻量命名元组，而不是为了复用去填假字段。
+    """
+    from types import SimpleNamespace
+
+    return SimpleNamespace(symbol=symbol, side=signal.side, quantity=signal.quantity)
+
+
 def _weight_instructions(
     cash: Decimal,
     positions: Mapping[str, Decimal],
@@ -652,6 +664,15 @@ class PaperRunSupervisor:
             spec = validate_spec(strategy.spec)
             provider: MarketDataProvider = self.app.state.market_data_provider
 
+            # 账户被删是**永久条件**，不能等到下一根 bar 才发现：先前这一检查写在
+            # "有没有新 bar"之后，于是 bar 序列不再前进时，运行会永远停在 RUNNING
+            # 且一条事件都不写（本轮实测：`test_error_on_account_deleted` 因此约
+            # 50% 概率红——它等的是"下一根 bar 到来"，而测试的 bar 是固定的）。
+            # 这里用**不加锁**的读做存在性判定；真正下单时那次 `for_update` 读不变。
+            if await AccountRepository(session).get_for_user(
+                    run.account_id, strategy.user_id) is None:
+                raise EvaluationError(f"account {run.account_id} was deleted")
+
             if isinstance(spec, WeightSpec):
                 await self._tick_weight(session, run, strategy, user, spec, provider)
                 return
@@ -787,7 +808,7 @@ class PaperRunSupervisor:
                 cooldown.tick()
                 placed = await self._place_signals(
                     session, run, strategy, spec.symbol, account, ctx,
-                    user, placed,
+                    user, placed, _bar_date(bar),
                 )
                 # The bar's orders moved the position (and cash). Re-read it so
                 # the risk overlay and the next catch-up bar see the ledger as
@@ -822,12 +843,17 @@ class PaperRunSupervisor:
 
     async def _place_signals(
         self, session, run: StrategyRun, strategy: Strategy, symbol: str,
-        account, ctx: StrategyContext, user: User, placed: int,
+        account, ctx: StrategyContext, user: User, placed: int, day: date,
     ) -> int:
         """Turn ``ctx.signals`` into orders; enforce the daily order cap.
 
         ``placed`` is the run's order count today so far (carried across the
         bars evaluated in one tick); returns the updated count.
+
+        Each signal that becomes a real decision also gets an intent ticket —
+        **这是生产里真正在跑的那条路**（三个 RUNNING 运行都是 template 单标的），
+        只给权重模式出票的话，票在生产里永远不会出现。出处写成
+        `strategy_run:<id>` + 该标的，闸判定沿用 run.params 里当日的记录。
         """
         service: PaperExecutionService = self.app.state.execution_service
         max_per_day = group_config(user, "max_orders_per_day")
@@ -837,6 +863,13 @@ class PaperRunSupervisor:
                     session, run, strategy.user_id, StrategyEventType.REJECTION,
                     f"signal skipped: daily order cap {max_per_day} reached",
                     {"side": signal.side, "quantity": str(signal.quantity)},
+                )
+                await self._record_order_intents(
+                    session, run, account, day,
+                    [{"instruction": _signal_instruction(symbol, signal),
+                      "outcome": "capped", "order_id": None,
+                      "reason": f"daily order cap {max_per_day} reached"}],
+                    self._verdict_for(run, day),
                 )
                 continue
             try:
@@ -853,8 +886,21 @@ class PaperRunSupervisor:
                     {"code": exc.code, "side": signal.side,
                      "quantity": str(signal.quantity)},
                 )
+                await self._record_order_intents(
+                    session, run, account, day,
+                    [{"instruction": _signal_instruction(symbol, signal),
+                      "outcome": "rejected", "order_id": None,
+                      "reason": exc.message}],
+                    self._verdict_for(run, day),
+                )
                 continue
             placed += 1
+            await self._record_order_intents(
+                session, run, account, day,
+                [{"instruction": _signal_instruction(symbol, signal),
+                  "outcome": "placed", "order_id": order.id}],
+                self._verdict_for(run, day),
+            )
             await self._event(
                 session, run, strategy.user_id, StrategyEventType.ORDER,
                 f"placed {signal.side} {signal.quantity} {symbol}",
@@ -862,6 +908,14 @@ class PaperRunSupervisor:
                  "order_type": order.order_type},
             )
         return placed
+
+    @staticmethod
+    def _verdict_for(run: StrategyRun, day: date) -> dict | None:
+        """这一天记过的风控判定（单标的路径不自己算——没有阈值就不该编一个）。"""
+        for event in reversed((run.params or {}).get("risk_events") or []):
+            if event.get("day") == day.isoformat():
+                return event.get("verdict")
+        return None
 
     # ---- weight track (spec: strategy-weight-mode) ----
 
@@ -1381,6 +1435,9 @@ class PaperRunSupervisor:
                 blocked_reason=blocked_reason,
                 order_id=item["order_id"],
                 outcome=item["outcome"],
+                # 未成交原因单独一列：规格要求"成交/被拒/未触发"三态都能对上，
+                # 而 `blocked_reason` 回答的是另一个问题（按风控契约该不该出门）。
+                outcome_reason=item.get("reason"),
             ))
         try:
             await session.flush()

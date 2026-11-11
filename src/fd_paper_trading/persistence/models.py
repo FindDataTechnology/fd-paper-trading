@@ -500,6 +500,10 @@ class OrderIntentRecord(Base):
         ForeignKey("orders.id", ondelete="SET NULL"), nullable=True, index=True
     )
     outcome: Mapped[str] = mapped_column(String(20))   # placed / rejected / capped / skipped
+    #: 未成交原因（被拒的服务端文案、被当日上限截住）。成交时可空。
+    #: 与 `blocked_reason` 分开：那个说的是"按风控契约该不该出门"，这个说的是
+    #: "这道门实际为什么没成交"——两件事同时不成立时都要能读出来。
+    outcome_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, index=True
     )

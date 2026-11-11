@@ -352,42 +352,44 @@ async def test_stop_backtest_run_rejected(client, app):
 
 @pytest.mark.asyncio
 async def test_error_on_account_deleted(client, app):
-    provider = await _wire(app)
+    """账户被删 → 下一次 tick 必须抛 EvaluationError（由循环落成 ERROR）。
+
+    **这条以前是 racy 的**（实测约 50% 红）：它启动后台循环后等 status 变 ERROR，
+    而账户检查原先写在"有没有新 bar"之后——测试的 bar 序列固定，第一根处理完之后
+    轮询就提前返回，「账户被删」这个**永久条件**永远发现不了。
+
+    修法两步：
+    ① 实现里把账户存在性检查提到新 bar 判断之前（永久条件不该等数据）；
+    ② 测试改成不经 API 建 run（不调度后台任务）+ 直接驱动 `_tick_once`，
+       去掉对循环时序与共享内存连接的全部依赖。
+    """
+    from fd_paper_trading.persistence.models import Account
+    from fd_paper_trading.strategy.backtester import EvaluationError
+
+    await _wire(app)
     h = await _authed(client)
     account_id = await _make_account(client, h)
     strat = await _make_strategy(client, h)
-    r = await client.post(
-        f"/api/v1/strategies/{strat['id']}/runs",
-        json={"account_id": str(account_id)},
-        headers=h,
-    )
-    run_id = r.json()["id"]
+    async with app.state.db.session_factory() as session:
+        run = StrategyRun(
+            strategy_id=uuid.UUID(strat["id"]), strategy_version=1,
+            mode=StrategyRunMode.PAPER, account_id=account_id,
+            status=StrategyRunStatus.STARTING, params={},
+        )
+        session.add(run)
+        await session.commit()
+        run_id = run.id
 
-    # Wait until RUNNING, then delete the account directly.
-    for _ in range(50):
-        d = await _run_detail(client, h, run_id)
-        if d["status"] == "RUNNING":
-            break
-        await asyncio.sleep(0.02)
-
-    from fd_paper_trading.persistence.models import Account
+    await app.state.strategy_runner._tick_once(run_id)  # 消费掉现有那根 bar
 
     async with app.state.db.session_factory() as session:
         acc = await session.get(Account, account_id)
         await session.delete(acc)
         await session.commit()
 
-    # Next tick sees account None -> EvaluationError -> loop marks ERROR.
-    for _ in range(100):
-        d = await _run_detail(client, h, run_id)
-        if d["status"] == "ERROR":
-            break
-        await asyncio.sleep(0.02)
-    else:
-        pytest.fail("run did not reach ERROR")
-    assert d["error"]
-    # Task is now looping no-op ticks + sleeping; safe to cancel.
-    await app.state.strategy_runner.shutdown()
+    # 没有新 bar 也必须报错——这正是本轮修的那一条
+    with pytest.raises(EvaluationError, match="was deleted"):
+        await app.state.strategy_runner._tick_once(run_id)
 
 
 @pytest.mark.asyncio
@@ -773,6 +775,7 @@ async def _tickets(app, run_id):
                 "quantity": r.quantity, "intent": r.intent,
                 "exportable": r.exportable, "blocked_reason": r.blocked_reason,
                 "order_id": r.order_id, "outcome": r.outcome, "as_of": r.as_of,
+                "outcome_reason": r.outcome_reason,
             }
             for r in rows
         ]
@@ -915,3 +918,76 @@ async def test_run_detail_exposes_the_tickets(client, app):
     for e in exposed:
         assert e["intent"]["paper_only"] is True
         assert "exportable" in e and "outcome" in e
+
+
+@pytest.mark.asyncio
+async def test_template_run_also_produces_tickets(client, app):
+    """**生产里真正在跑的那条路**（3 个 RUNNING 运行都是 template）。
+
+    只给权重模式出票的话，票在生产里永远不会出现——这条钉住单标的路径也出票。
+    """
+    provider = await _wire(app)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h)
+    run_id = await _make_run_db(app, uuid.UUID(strat["id"]), account_id)
+
+    sup = app.state.strategy_runner
+    await sup._tick_once(run_id)
+    provider.add_bars(1)
+    await sup._tick_once(run_id)
+
+    tickets = await _tickets(app, run_id)
+    orders = await _orders_for_run(client, h, account_id, run_id)
+    assert len(tickets) == len(orders) == 2, (len(tickets), len(orders))
+    for t in tickets:
+        assert t["outcome"] == "placed"
+        assert t["order_id"] is not None
+        assert t["intent"]["derived_from"] == [f"strategy_run:{run_id}"]
+        assert t["intent"]["paper_only"] is True
+        assert t["intent"]["symbol"] == "AAPL"
+        assert t["intent"]["as_of"] in ("2026-01-05", "2026-01-06")
+        # 这条路径没有组合阈值 → 判定是"不可用"而不是"通过"
+        assert t["intent"]["risk_verdict"]["status"] == "unavailable"
+        assert t["exportable"] is False
+
+
+@pytest.mark.asyncio
+async def test_template_capped_signal_keeps_its_reason(client, app):
+    """被当日上限截住的信号：票照记，`outcome=capped` 且有原因（三态可对账）。"""
+    provider = await _wire(app)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h)
+    run_id = await _make_run_db(app, uuid.UUID(strat["id"]), account_id)
+
+    sup = app.state.strategy_runner
+    # 把当日上限压到 0：所有信号都落到"截住"这条分支。
+    # 上限挂在**用户组**上（`group_config(user, key)` → `user.group.config`），
+    # 不是挂在用户上——先前按 user.group_config 写，直接 AttributeError。
+    from sqlalchemy import select
+
+    from fd_paper_trading.persistence.models import User, UserGroup
+
+    # 测试用户没有绑定组（`user.group_id is None`）→ 现建一个组并绑上：
+    # 上限只能从组上压低，这是 `group_config()` 的唯一读法。
+    async with app.state.db.session_factory() as session:
+        user = (await session.execute(select(User))).scalars().first()
+        if user.group_id is None:
+            group = UserGroup(name="cap-zero", config={"max_orders_per_day": 0})
+            session.add(group)
+            await session.flush()
+            user.group_id = group.id
+        else:
+            group = await session.get(UserGroup, user.group_id)
+            group.config = {**(group.config or {}), "max_orders_per_day": 0}
+        await session.commit()
+
+    await sup._tick_once(run_id)
+
+    tickets = await _tickets(app, run_id)
+    assert tickets
+    assert all(t["outcome"] == "capped" for t in tickets)
+    assert all("daily order cap" in (t["outcome_reason"] or "") for t in tickets), \
+        [t["outcome_reason"] for t in tickets]
+    assert all(t["order_id"] is None for t in tickets)
