@@ -36,6 +36,11 @@ import httpx
 DEFAULT_ENDPOINT_ENV = "FD_QUANT_COMPUTE_ENDPOINT"
 DEFAULT_ENDPOINT = "http://127.0.0.1:8799/mcp"
 
+#: 计算面的共享 bearer（change converge-line-identity-and-keys 8.6）。
+#: fd-quant 侧开了共享门之后，本线的回测计算面必须带同一把令牌；未设=不发该头，
+#: 与接入前逐字节一致（门没开时发不发都无所谓，门开了就必须发）。
+TOKEN_ENV = "FD_QUANT_COMPUTE_TOKEN"
+
 DEFAULT_TIMEOUT = 15.0
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -52,6 +57,11 @@ class ComputePlaneUnavailable(RuntimeError):
 
 def endpoint() -> str:
     return os.environ.get(DEFAULT_ENDPOINT_ENV, DEFAULT_ENDPOINT)
+
+
+def endpoint_token() -> str:
+    """计算面的共享 bearer；未配置返回空串（调用处据此决定是否发 Authorization）。"""
+    return (os.environ.get(TOKEN_ENV) or "").strip()
 
 
 def _parse_sse(text: str) -> dict:
@@ -94,6 +104,9 @@ def call_tool(
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
     }
+    token = endpoint_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
         # trust_env=False：不让 httpx 读取环境/系统代理配置。计算面是**内网**
         # 服务（本机开发端口或集群内 service 名），走代理必然失败——而失败形态
