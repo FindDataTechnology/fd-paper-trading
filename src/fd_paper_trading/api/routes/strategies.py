@@ -391,7 +391,8 @@ async def _replay_single_symbol(app, run, spec, start: date, end: date, costs=No
 
 
 async def _replay_universe(app, spec, start: date, end: date, initial_cash: Decimal,
-                           costs=None, risk_thresholds=None, risk_sectors=None):
+                           costs=None, risk_thresholds=None, risk_sectors=None,
+                           risk=None):
     """The weight path: date-aligned bars for the universe through the engine.
 
     One provider call per universe symbol, each filtered to the window, then the
@@ -437,6 +438,7 @@ async def _replay_universe(app, spec, start: date, end: date, initial_cash: Deci
         spec,
         bars_by_symbol,
         initial_cash,
+        risk=risk,
         evaluate_code=build_weight_evaluator(spec),
         risk_thresholds=risk_thresholds,
         risk_sectors=risk_sectors,
@@ -634,10 +636,12 @@ async def _run_backtest(app, run_id: uuid.UUID) -> None:
                     for d, e in wf_equity
                 )
             elif isinstance(spec, WeightSpec):
+                wt_risk = RiskConfig.from_dict((run.params or {}).get("risk"))
                 result, coverage_record = await _replay_universe(
                     app, spec, start, end, initial_cash, cost_model,
                     risk_thresholds=(run.params or {}).get("risk_thresholds"),
                     risk_sectors=(run.params or {}).get("risk_sectors"),
+                    risk=wt_risk,
                 )
                 _record_weight_result(run, result)
                 if result.risk_events:
@@ -645,6 +649,15 @@ async def _run_backtest(app, run_id: uuid.UUID) -> None:
                     # risk_events 为空 → 键不出现（"没判过"≠"判过且通过"）。
                     run.params = {**(run.params or {}),
                                   "risk_events": result.risk_events}
+                if result.risk_config is not None:
+                    # 与单标的轨同名同形：来源 + 触发记录。配了没触发时
+                    # risk_triggers 为 None（"没配"与"配了没触发"可分开）。
+                    run.params = {
+                        **(run.params or {}),
+                        "risk_config": result.risk_config,
+                        **({"risk_triggers": result.risk_triggers}
+                           if result.risk_triggers else {}),
+                    }
                 # 覆盖度记录落在 params：指纹 + 每标的缺失/休市段数 + 是否检查。
                 run.params = {**(run.params or {}), "data_coverage": coverage_record}
                 session.add_all(
@@ -734,24 +747,11 @@ async def start_backtest(
         # 而"用户显式关掉了成本"与"这个请求根本没有成本字段"是两个不同的事实。
         params["cost_model"] = payload.cost_model.model_dump(mode="json")
     if payload.risk is not None:
-        # 权重（多标的）轨没有 overlay 通道：`replay_weights` 只收
-        # risk_thresholds（组合门），**不收 risk**。所以这里必须显式拒绝——
-        # 收下再忽略等于给出一份"带止损"的记录而实际没有任何止损，正是本仓
-        # 纪律禁止的沉默谎言（成本模型那段同款判据）。
-        if weight_spec is not None:
-            raise APIError(
-                "risk_not_supported_on_weight_track",
-                "the risk overlay (stop_loss_pct / trailing_stop_pct / "
-                "cooldown_bars) is not yet supported on the weight (multi-symbol) "
-                "track: the weight replay has no overlay pass, so accepting it "
-                "would silently drop it. Express the stop in weights_series "
-                "(write that symbol's weight to 0 on the trigger date), or run a "
-                "single-symbol strategy.",
-                400,
-            )
         # Same snapshot rule as costs (design: 配置快照进结果): "带止损的 run"
         # 与"没配风控的 run"的差异必须可归因（spec: Overlay provenance is
         # recorded）。校验（范围）在 RiskConfig 构造时做。
+        # 两条轨都支持（2026-11-12 起权重轨也有了 overlay pass）：单标的走
+        # `replay(...)`，权重走 `replay_weights(risk=...)`，判定函数同一份。
         RiskConfig.from_dict(payload.risk.model_dump(mode="json"))
         params["risk"] = payload.risk.model_dump(mode="json")
     if payload.risk_thresholds is not None:
@@ -904,23 +904,10 @@ async def start_paper_run(
     else:
         params = {"symbol": strategy.spec.get("symbol")}
     if payload.risk is not None:
-        # 权重轨 live 只消费"冷却"（effective_target_weight），**没有任何地方触发
-        # 止损、也没有地方上冷却**——收下这个配置等于让用户以为持仓受保护。所以
-        # 与回测同一个判据：多标的轨显式拒绝，单标的轨才接受。
-        if weight_spec is not None:
-            raise APIError(
-                "risk_not_supported_on_weight_track",
-                "the risk overlay (stop_loss_pct / trailing_stop_pct / "
-                "cooldown_bars) is not yet supported on the weight (multi-symbol) "
-                "track: the live weight path only applies a cooldown that nothing "
-                "arms, so no stop would ever fire. Express the stop in "
-                "weights_series, or run a single-symbol strategy.",
-                400,
-            )
         # 与回测同一条快照规则：run 记录要能回答"这次带了什么止损"，且"用户显式
         # 没配"与"这个请求根本没有该字段"是两个不同事实。范围校验在构造
         # RiskConfig 时做（越界直接 400，而不是起跑后每根 bar 静默无效）。
-        # 单标的 live 侧不需要改动——runner 里本来就读 run.params["risk"]。
+        # 两条轨都支持（2026-11-12 起权重轨的 live tick 也按 bar 判定止损）。
         RiskConfig.from_dict(payload.risk.model_dump(mode="json"))
         params["risk"] = payload.risk.model_dump(mode="json")
     if payload.risk_thresholds is not None:

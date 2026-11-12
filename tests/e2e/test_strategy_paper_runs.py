@@ -1116,11 +1116,12 @@ async def test_live_risk_overlay_closes_the_position_on_a_gap_bar(client, app):
 
 
 @pytest.mark.asyncio
-async def test_weight_track_live_refuses_risk_overlay_instead_of_no_op(client, app):
-    """权重轨 live 传止损 → 显式 400（否则是"看着受保护实际没保护"的空转）。
+async def test_weight_track_live_accepts_and_persists_risk_overlay(client, app):
+    """权重轨 live 带止损 → 接受，且配置快照进 run.params。
 
-    权重轨 live 只消费冷却（`effective_target_weight`），而**没有任何地方触发
-    止损、也没有地方上冷却**——配置收下就等于骗人。
+    2026-11-12 之前这里是显式 400（权重轨 live 只消费一个永不 arm 的冷却）。
+    现在 live tick 按 bar 判定并落单，"接受"才有意义——所以这条从"拒绝"翻成
+    "接受并留痕"，真正的行为验收在下一条。
     """
     await _wire(app)
     h = await _authed(client)
@@ -1129,9 +1130,151 @@ async def test_weight_track_live_refuses_risk_overlay_instead_of_no_op(client, a
 
     r = await client.post(
         f"/api/v1/strategies/{strat['id']}/runs",
-        json={"account_id": str(account_id), "risk": {"stop_loss_pct": "0.10"}},
+        json={"account_id": str(account_id), "risk": {"stop_loss_pct": "0.10",
+                                                      "cooldown_bars": 2}},
         headers=h,
     )
-    assert r.status_code == 400, r.text
-    assert "risk_not_supported_on_weight_track" in r.text
-    assert "weights_series" in r.text
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert float(body["params"]["risk"]["stop_loss_pct"]) == pytest.approx(0.10)
+    assert body["params"]["risk"]["cooldown_bars"] == 2
+    await client.post(f"/api/v1/strategy-runs/{body['id']}/stop", headers=h)
+
+
+@pytest.mark.asyncio
+async def test_weight_track_live_stop_fires_on_a_crash_bar(client, app):
+    """带 10% 止损的权重 run：崩盘 bar → 该标的被平掉 + risk_triggers 落账。
+
+    这是权重轨 live 覆盖的**行为**验收。此前权重轨的止损在 live 上是空转
+    （只有冷却消费、无人触发），所以这条要么红要么证明真的生效。
+    """
+    provider = await _wire(app)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h, spec=WEIGHT_SPEC_TWO, name="wr-stop")
+    run_id = await _make_weight_run(
+        app, client, h,
+        params_extra={"risk": {"stop_loss_pct": "0.10", "cooldown_bars": 2}},
+    )
+
+    sup = app.state.strategy_runner
+    await sup._tick_once(run_id)
+    detail = await _run_detail(client, h, run_id)
+    held = (detail.get("weight_snapshots") or [{}])[-1].get("actual_weights") or {}
+    assert held, "起跑后没有持仓，止损无从触发"
+
+    # 崩盘 bar 必须晚于 last_bar_date（第一 tick 已处理到 1/5），否则
+    # `pending` 为空、tick 直接返回，什么都没发生——那会伪装成"止损没触发"。
+    # 这个 provider 的 _bars 是所有标的主共用的，追加一根即两只都崩。
+    crash = int(datetime(2026, 1, 6, tzinfo=UTC).timestamp())
+    provider._bars.append(
+        Bar(ts=crash, open=Decimal("40"), high=Decimal("41"),
+            low=Decimal("39"), close=Decimal("40.5"), volume=Decimal(1000))
+    )
+    await sup._tick_once(run_id)
+
+    detail = await _run_detail(client, h, run_id)
+    triggers = detail["params"].get("risk_triggers") or []
+    assert triggers, "权重轨 live 止损没有触发：run.params 里没有 risk_triggers"
+    assert {t["symbol"] for t in triggers} == {"600000", "600036"}, triggers
+    state = detail["params"].get("risk_state") or {}
+    assert state.get("cooldown"), "触发后没有上冷却：下个调仓点会原样买回"
+
+
+@pytest.mark.asyncio
+async def test_weight_track_live_stop_does_not_rebuy_during_cooldown(client, app):
+    """止损后带冷却：下一根 bar 不许原样买回，且不重复记触发。
+
+    这条对应"止损当根卖、下个调仓点原样买回在构造上不可能"——权重轨的冷却
+    此前只被消费、从不 arm，所以这句话在 live 上从未成立过。
+    """
+    provider = await _wire(app)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h, spec=WEIGHT_SPEC_TWO, name="wr-cd")
+    run_id = await _make_weight_run(
+        app, client, h,
+        params_extra={"risk": {"stop_loss_pct": "0.10", "cooldown_bars": 2}},
+    )
+
+    sup = app.state.strategy_runner
+    await sup._tick_once(run_id)
+    provider._bars.append(
+        Bar(ts=int(datetime(2026, 1, 6, tzinfo=UTC).timestamp()),
+            open=Decimal("40"), high=Decimal("41"), low=Decimal("39"),
+            close=Decimal("40.5"), volume=Decimal(1000))
+    )
+    await sup._tick_once(run_id)
+    detail = await _run_detail(client, h, run_id)
+    first = detail["params"].get("risk_triggers") or []
+    assert len(first) == 2, first
+
+    # 下一根 bar：价格反弹，若冷却没生效，every=1 会立刻按 0.5 权重建回来。
+    provider._bars.append(
+        Bar(ts=int(datetime(2026, 1, 7, tzinfo=UTC).timestamp()),
+            open=Decimal("100"), high=Decimal("101"), low=Decimal("99"),
+            close=Decimal("100"), volume=Decimal(1000))
+    )
+    await sup._tick_once(run_id)
+    detail = await _run_detail(client, h, run_id)
+
+    # 不重复触发（已经平仓、当日也未必再破线）
+    triggers = detail["params"].get("risk_triggers") or []
+    assert len(triggers) == 2, f"重复记触发：{triggers}"
+
+    # 冷却期内目标不变、有效权重为 0（"这个零是冷却不是策略"）
+    snap = (detail.get("weight_snapshots") or [])[-1]
+    eff = snap.get("effective_weights") or {}
+    assert eff and all(v == 0.0 for v in eff.values()), (
+        f"冷却期内竟按目标权重建仓：effective={eff} target={snap.get('target_weights')}"
+    )
+    assert any(v > 0 for v in (snap.get("target_weights") or {}).values()), \
+        "策略目标被改写成 0：冷却与策略归零混为一谈"
+
+
+@pytest.mark.asyncio
+async def test_weight_track_live_stop_skips_symbols_without_a_bar(client, app):
+    """当日无 bar 的标的不判定（没有价格就没有触发），只记缺口。
+
+    与回测同一条规则；否则会拿上一根的 low 冒充当日行情，把停牌股"止损"掉。
+    """
+    class _PerSymbolProvider(_ControlledProvider):
+        """get_bars 按标的分流：让某只标的在新增日期上"没有 bar"。"""
+
+        def __init__(self):
+            super().__init__()
+            self.per_symbol: dict[str, list[Bar]] = {}
+
+        async def get_bars(self, symbol, timeframe, limit):
+            if self.fail_fetch:
+                raise RuntimeError("provider down")
+            bars = self.per_symbol.get(symbol)
+            if bars is None:
+                return await super().get_bars(symbol, timeframe, limit)
+            return bars[-limit:] if limit else list(bars)
+
+    provider = _PerSymbolProvider()
+    provider.add_bars(5, start=date(2026, 1, 1))
+    await _wire(app, provider=provider)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h, spec=WEIGHT_SPEC_TWO, name="wr-skip")
+    run_id = await _make_weight_run(
+        app, client, h,
+        params_extra={"risk": {"stop_loss_pct": "0.10"}},
+    )
+
+    sup = app.state.strategy_runner
+    await sup._tick_once(run_id)
+
+    base = list(provider._bars)
+    crash = Bar(ts=int(datetime(2026, 1, 6, tzinfo=UTC).timestamp()),
+                open=Decimal("40"), high=Decimal("41"), low=Decimal("39"),
+                close=Decimal("40.5"), volume=Decimal(1000))
+    # 主标的（600000）崩；600036 当日无 bar（停牌）
+    provider.per_symbol = {"600000": [*base, crash], "600036": list(base)}
+    await sup._tick_once(run_id)
+
+    detail = await _run_detail(client, h, run_id)
+    triggers = detail["params"].get("risk_triggers") or []
+    assert {t["symbol"] for t in triggers} == {"600000"}, triggers

@@ -38,6 +38,12 @@ from typing import Callable, Mapping, Sequence
 from ..marketdata.provider import Bar
 from .backtester import EvaluationError
 from .ctx import SymbolSeries, WeightContext
+from .risk_overlay import (
+    CooldownState,
+    RiskConfig,
+    effective_target_weight,
+    evaluate_bar_overlay,
+)
 from .spec import WeightSpec
 from .weights import validate_weights
 
@@ -119,6 +125,10 @@ class WeightBacktestResult:
     #: 组合级风控闸在每次调仓点的判定（未配置阈值时为空数组）。
     #: 只记录**触达了什么**，不改回测语义——处置由调用方决定（design: 判定与处置分离）。
     risk_events: list[dict] = field(default_factory=list)
+    #: run 级风控覆盖的来源与触发记录。与单标的轨同名同形（`risk_config` /
+    #: `risk_triggers`），未配置时为 None——"没配"与"配了没触发"必须能分开。
+    risk_config: dict | None = None
+    risk_triggers: list[dict] | None = None
 
 
 class WeightSource:
@@ -184,14 +194,47 @@ def _bar_date(bar: Bar) -> date:
 
 
 class _WeightPortfolio:
-    """Cash plus per-symbol integer positions, valued at latest closes."""
+    """Cash plus per-symbol integer positions, valued at latest closes.
+
+    ``cost`` carries the per-share **weighted average** cost, which the risk
+    overlay needs: an absolute stop is a distance from the entry price, and there
+    is no entry price without it. Weighted average rather than FIFO because the
+    only consumer is "what did I pay per share", and the live ledger's
+    ``position.avg_price`` uses the same basis — two bases would make one
+    ``stop_loss_pct`` mean two different things on two tracks.
+    """
 
     def __init__(self, cash: Decimal) -> None:
         self.cash = cash
         self.positions: dict[str, Decimal] = {}
+        #: Per-share average cost. Absent for symbols never bought in this replay.
+        self.cost: dict[str, Decimal] = {}
 
     def position(self, symbol: str) -> Decimal:
         return self.positions.get(symbol, Decimal(0))
+
+    def cost_of(self, symbol: str) -> Decimal | None:
+        return self.cost.get(symbol)
+
+    def apply_fill(self, symbol: str, signed: Decimal, price: Decimal) -> None:
+        """Book one fill: cash, quantity, and the average cost on the buy side.
+
+        A sell leaves the average untouched (selling does not change what the
+        remaining shares cost); a position returning to zero drops both the
+        quantity and the cost so a later re-entry starts a fresh basis rather
+        than inheriting the previous round's entry price.
+        """
+        self.cash -= signed * price
+        held = self.position(symbol)
+        new_qty = held + signed
+        if new_qty == 0:
+            self.positions.pop(symbol, None)
+            self.cost.pop(symbol, None)
+            return
+        if signed > 0:
+            prior = self.cost.get(symbol, Decimal(0))
+            self.cost[symbol] = (held * prior + signed * price) / new_qty
+        self.positions[symbol] = new_qty
 
     def equity(self, marks: Mapping[str, Decimal]) -> Decimal:
         total = self.cash
@@ -258,6 +301,7 @@ def replay_weights(
     evaluate_code: Callable[[WeightContext], Mapping[str, float]] | None = None,
     risk_thresholds: Mapping[str, Any] | None = None,
     risk_sectors: Mapping[str, str] | None = None,
+    risk: RiskConfig | None = None,
 ) -> WeightBacktestResult:
     """Replay a universe, rebalancing every ``every_n_bars`` trading dates.
 
@@ -265,10 +309,28 @@ def replay_weights(
     universe member traded is a decision date); the cadence is counted over that
     axis rather than over calendar days, so "every 5 bars" means five decisions,
     not five days off a calendar that includes weekends.
+
+    ``risk`` (run-level overlay) is checked on **every** date in the axis, not
+    only on rebalance dates: a stop that waited for the next rebalance would be
+    up to ``every_n_bars - 1`` decisions late, which is the very latency the
+    "write it into the weights series" workaround already has. Triggering closes
+    that symbol at the worse of the stop level and the bar's open (the same
+    gap-conservative fill the single-symbol track uses), then arms the cooldown
+    so the next rebalance cannot buy it back. ``risk=None`` is bit-identical to
+    the pre-overlay behaviour (spec: 缺省零变化).
     """
     universe = list(spec.universe)
     # 组合级风控闸的记录位。未配置阈值时保持空数组——零行为变化。
     risk_events: list[dict] = []
+    # run 级覆盖（与单标的轨同一套判定函数，所以两轨结论按构造一致）。
+    risk_cfg = risk if (risk is not None and risk.active) else None
+    risk_triggers: list[dict] = []
+    risk_fills: list[Instruction] = []
+    cooldown = CooldownState()
+    #: 每标的持有期峰值（自建仓起的 close 最大值；平掉即清）。与单标的轨的
+    #: `peak_value` 同口径——用 close 而不是 high，否则同一 trailing_stop_pct
+    #: 在两条轨上会给出不同的触发点。
+    peaks: dict[str, Decimal] = {}
     axis = sorted(
         {
             _bar_date(b)
@@ -296,6 +358,57 @@ def replay_weights(
         for sym in stale:
             gaps.append({"date": day.isoformat(), "symbol": sym})
 
+        # Run-level overlay, checked on **every** date (not only rebalance dates)
+        # and **before** the rebalance: the stop must win the bar, and a rebalance
+        # later in this iteration sees the position already closed plus the armed
+        # cooldown, which is what makes "sold this bar, bought back at the next
+        # rebalance" impossible by construction.
+        if risk_cfg is not None:
+            for sym in universe:
+                qty = portfolio.position(sym)
+                if qty <= 0 or sym in stale:
+                    continue
+                bar = series[sym].bars[-1] if series[sym].has_bar_on(day) else None
+                if bar is None:
+                    continue
+                trigger = evaluate_bar_overlay(
+                    risk_cfg, sym, "SELL",
+                    entry_price=portfolio.cost_of(sym),
+                    peak_value=peaks.get(sym),
+                    bar_open=bar.open, bar_close=bar.close,
+                    bar_low=bar.low, bar_high=bar.high,
+                )
+                if trigger is None:
+                    continue
+                risk_triggers.append({
+                    "date": day.isoformat(),
+                    "symbol": trigger.symbol,
+                    "kind": trigger.kind,
+                    "trigger_level": str(trigger.trigger_level),
+                    "fill_price": str(trigger.fill_price),
+                    "detail": trigger.detail,
+                })
+                fill = Instruction(
+                    symbol=sym, side="SELL", quantity=qty,
+                    price=trigger.fill_price, requested_quantity=qty,
+                )
+                portfolio.apply_fill(sym, -qty, trigger.fill_price)
+                risk_fills.append(fill)
+                cooldown.arm(sym, risk_cfg.cooldown_bars)
+                peaks.pop(sym, None)
+            # 峰值只对仍持有的标的推进；当日无 bar 的标的沿用上一峰值（与
+            # `_marks_for` 的估值规则一致：估值可回看，触发必须当日有价）。
+            for sym in universe:
+                if portfolio.position(sym) <= 0:
+                    peaks.pop(sym, None)
+                    continue
+                if sym in stale:
+                    continue
+                mark = marks.get(sym)
+                if mark is None:
+                    continue
+                peaks[sym] = mark if sym not in peaks else max(peaks[sym], mark)
+
         is_rebalance = index % every == 0
         if is_rebalance:
             snapshot = RebalanceSnapshot(
@@ -319,6 +432,17 @@ def replay_weights(
                     target, cash_floor, _ = source.target(day, ctx, index)
                 target = {str(k).upper(): float(v) for k, v in target.items()}
                 target_symbols = {k: v for k, v in target.items() if k != CASH_LABEL}
+                # 冷却：把触发标的的**有效**目标权重压到 0，策略自己的目标原样保留
+                # 在 snapshot.target_weights 里——两项并列才能回答"这个零是冷却还是
+                # 策略主动归零"（spec: 有效/目标两列可归因）。
+                if risk_cfg is not None:
+                    effective = {
+                        k: float(effective_target_weight(k, Decimal(str(v)), cooldown))
+                        for k, v in target_symbols.items()
+                    }
+                    if effective != target_symbols:
+                        snapshot.effective_weights = dict(effective)
+                        target_symbols = effective
                 errors = validate_weights(universe, target_symbols, cash_floor=cash_floor)
                 if errors:
                     snapshot.error = "; ".join(errors)
@@ -364,8 +488,13 @@ def replay_weights(
         equity_values.append(equity)
         curve.append((day, equity))
         prior_marks = marks
+        # 冷却在**日末**推进，与单标的轨同序（arm → 应用当根 → tick）。放在调仓
+        # 之前会把触发当根的冷却提前消耗掉：1/2 触发后本应压制 1/3，提早 tick
+        # 会让 1/3 立刻买回——那正是"止损当根卖、下个调仓点原样买回"要禁止的事。
+        if risk_cfg is not None:
+            cooldown.tick()
 
-    stats = _stats(equity_values, initial_cash, snapshots)
+    stats = _stats(equity_values, initial_cash, snapshots, risk_fills)
     return WeightBacktestResult(
         stats=stats,
         equity_points=curve,
@@ -373,6 +502,8 @@ def replay_weights(
         universe=universe,
         data_gaps=gaps,
         risk_events=risk_events,
+        risk_config=risk_cfg.to_dict() if risk_cfg is not None else None,
+        risk_triggers=risk_triggers or None,
     )
 
 
@@ -534,10 +665,8 @@ def _rebalance(
         if ins.skipped or ins.quantity <= 0:
             continue
         signed = ins.quantity if ins.side == "BUY" else -ins.quantity
-        portfolio.cash -= signed * ins.price
-        portfolio.positions[ins.symbol] = portfolio.position(ins.symbol) + signed
-        if portfolio.positions[ins.symbol] == 0:
-            del portfolio.positions[ins.symbol]
+        # 记账走 apply_fill：它同时维护每股成本，overlay 的绝对止损要靠它。
+        portfolio.apply_fill(ins.symbol, signed, ins.price)
     return instructions
 
 
@@ -545,6 +674,7 @@ def _stats(
     equity: Sequence[Decimal],
     initial_cash: Decimal,
     snapshots: Sequence[RebalanceSnapshot],
+    risk_fills: Sequence["Instruction"] = (),
 ) -> dict:
     """Portfolio-level stats. Same six fields as the single-symbol path (spec:
 
@@ -556,7 +686,10 @@ def _stats(
     final = equity[-1]
     total_return = float(final / initial_cash) - 1.0 if initial_cash else 0.0
     sharpe = _sharpe(list(equity))
+    # 止损平仓发生在非调仓日，不进任何 snapshot 的 instructions——但它确实成交了，
+    # 所以成交数必须把它算上，否则"配了止损的 run"的 trade_count 会少算。
     trades = [i for s in snapshots for i in s.instructions if not i.skipped and i.quantity > 0]
+    trades += [i for i in risk_fills if not i.skipped and i.quantity > 0]
     scaled = [i for i in trades if i.scaled]
     return {
         "total_return": round(total_return, 6),

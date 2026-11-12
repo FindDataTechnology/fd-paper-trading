@@ -483,14 +483,13 @@ def run_backtest(
         initial_cash: Starting cash for the simulated portfolio
         risk: Optional run-level risk overlay — ``stop_loss_pct`` /
             ``trailing_stop_pct`` (fractions in (0,1)) and ``cooldown_bars``
-            (int). When present on a **single-symbol** strategy the engine closes
-            the position whose stop fires (bar ``low`` for backtests, gap-aware
-            fill at the worse of the stop price and that bar's open).
-            **Single-symbol track only**: the weight (multi-symbol) track has no
-            overlay pass, so a weight-track request carrying this field is
-            rejected with ``risk_not_supported_on_weight_track`` rather than
-            accepted and silently ignored — express weight-track stops in
-            ``weights_series`` instead. Omitted = no overlay at all (the
+            (int). Honoured on **both tracks** with the same semantics: the check
+            runs on every trading day (not only on rebalance dates), a trigger
+            closes that symbol at the worse of the stop level and that bar's open
+            (gap-conservative), and the symbol's *effective* target weight is 0
+            for ``cooldown_bars`` rebalances while the snapshot keeps the
+            strategy's own ``target_weights`` beside ``effective_weights`` so the
+            zero is attributable. Omitted = no overlay at all (the
             absent/disabled distinction is preserved on purpose: the API stores
             a snapshot only when the field is sent).
         cost_model: Optional cost model — ``enabled`` plus
@@ -578,20 +577,17 @@ def start_strategy(
         account_id: UUID of the paper account to trade
         risk: Optional run-level risk overlay for the **live** run —
             ``stop_loss_pct`` / ``trailing_stop_pct`` (fractions in (0,1)) and
-            ``cooldown_bars`` (int). Honoured on the **single-symbol** track,
-            where the live runner re-checks the overlay on every new bar and
-            sells when the stop fires (and the config is snapshotted onto the
-            run, so "this run had a stop" stays answerable afterwards).
-            **Not supported on the weight (multi-symbol) track**: that live path
-            only consumes a cooldown that nothing arms, so no stop would ever
-            fire — such a request is rejected with
-            ``risk_not_supported_on_weight_track`` instead of being accepted as a
-            no-op. Express weight-track stops in ``weights_series``. Omitted = no
-            overlay, identical to before.
+            ``cooldown_bars`` (int). Honoured on **both tracks**: the runner
+            re-checks the overlay on every new bar (single-symbol) or every
+            processed weight-run bar, including non-rebalance days (weight
+            track), and sells when the stop fires; the config and the per-symbol
+            peaks/cooldown state are snapshotted onto the run, so "this run had a
+            stop" stays answerable afterwards. Omitted = no overlay, identical to
+            before.
 
     Returns:
         The run on success; error dict on failure (e.g. group active-strategy
-        limit, an out-of-range stop fraction, or the weight-track rejection above).
+        limit, or an out-of-range stop fraction rejected before the run starts).
     """
     payload: dict = {"account_id": account_id}
     # 与 run_backtest 同一套规则：只在显式给出时才放进 payload，缺席不塞默认值

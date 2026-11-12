@@ -433,22 +433,33 @@ async def test_partial_thresholds_surface_as_unavailable_not_ok(client, auth_hea
 
 
 @pytest.mark.asyncio
-async def test_weight_track_refuses_risk_overlay_instead_of_dropping_it(
+async def test_weight_track_backtest_accepts_and_records_risk_overlay(
     client, auth_headers
 ):
-    """权重轨没有 overlay 通道 → 显式 400，而不是收下再静默丢弃。
+    """权重轨带止损 → 接受并**真的生效**，来源与触发都落 run.params。
 
-    `replay_weights` 只收 `risk_thresholds`（组合门），**不收** `risk`。此前
-    权重轨传止损会被静默忽略：run 记录看起来"带了止损"，实际一笔都没保护。
-    这条与成本模型那条同款判据（沉默谎言），只是止损这侧此前没有守卫。
+    2026-11-12 之前这里是显式 400（当时 `replay_weights` 没有 overlay pass，
+    收下等于静默丢弃）。现在两条轨都支持，所以这条从"拒绝"翻成"接受"：
+    必须能看见 `risk_config`，且若真触发过则 `risk_triggers` 在。
     """
     headers = await auth_headers()
     sid = await _make_strategy(client, headers, spec=WEIGHT_SPEC_RISK)
     r = await client.post(
         f"/api/v1/strategies/{sid}/backtests",
-        json={**_risk_window(), "risk": {"stop_loss_pct": "0.10"}},
+        json={**_risk_window(), "risk": {"stop_loss_pct": "0.99"}},
         headers=headers,
     )
-    assert r.status_code == 400, r.text
-    assert "risk_not_supported_on_weight_track" in r.text
-    assert "weights_series" in r.text, "拒绝文案必须给出替代路径"
+    assert r.status_code == 202, r.text
+    run_id = r.json()["id"]
+
+    detail = None
+    for _ in range(200):
+        rr = await client.get(f"/api/v1/strategy-runs/{run_id}", headers=headers)
+        detail = rr.json()
+        if detail["status"] in ("COMPLETED", "FAILED"):
+            break
+        await asyncio.sleep(0.05)
+    assert detail["status"] == "COMPLETED", detail.get("error")
+    # 0.99 的止损在正常行情里不会触发 —— 验的是"配了就被记住"，不是"必触发"。
+    assert detail["params"]["risk_config"]["stop_loss_pct"] == "0.99" or \
+        float(detail["params"]["risk_config"]["stop_loss_pct"]) == pytest.approx(0.99)

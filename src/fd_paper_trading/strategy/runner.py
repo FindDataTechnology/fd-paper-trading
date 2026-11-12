@@ -996,8 +996,25 @@ class PaperRunSupervisor:
         gaps = list(run.data_gaps or [])
         placed = await OrderRepository(session).count_for_run(run.id, _day_start())
 
+        # run 级风控覆盖（2026-11-12 起权重轨也支持）。状态全在 run.params，
+        # 与单标的轨同名同形：`risk_state.{peaks,cooldown}` + `risk_triggers`。
+        risk_cfg = RiskConfig.from_dict((run.params or {}).get("risk"))
+        risk_state = dict((run.params or {}).get("risk_state") or {})
+        cooldown = CooldownState(remaining=dict(risk_state.get("cooldown") or {}))
+        peaks = {
+            k: Decimal(str(v)) for k, v in (risk_state.get("peaks") or {}).items()
+        }
+
         for day in pending:
             processed += 1
+            # Overlay 在**每个** pending bar 上跑（不只调仓日）：止损等到下一个
+            # 调仓点才处理，就与"写进权重序列"那条老路没有区别了。顺序是先
+            # overlay 后调仓——触发的那根 bar 必须让止损赢，并由冷却阻止同根回买。
+            if risk_cfg.active:
+                placed = await self._weight_overlay_step(
+                    session, run, strategy, user, provider, account,
+                    universe, bars_by_symbol, day, placed, risk_cfg, cooldown, peaks,
+                )
             # The cadence counts processed bars for this run (spec wording), so
             # the Nth one rebalances; a tick that reaches several bars advances
             # the count once per bar, not once per poll.
@@ -1013,6 +1030,17 @@ class PaperRunSupervisor:
             await self._snapshot_weight_equity(
                 session, run, provider, account, universe, bars_by_symbol, day
             )
+            if risk_cfg.active:
+                # 日末推进冷却，与单标的轨同序（arm → 处理当根 → tick）。若放在
+                # 调仓之前，触发当根就会把整段冷却提前消耗掉。
+                cooldown.tick()
+                run.params = {
+                    **(run.params or {}),
+                    "risk_state": {
+                        "peaks": {k: str(v) for k, v in peaks.items()},
+                        "cooldown": dict(cooldown.remaining),
+                    },
+                }
 
         run.weight_snapshots = snapshots
         run.data_gaps = gaps
@@ -1222,6 +1250,93 @@ class PaperRunSupervisor:
             if position is not None and position.quantity != 0:
                 positions[symbol] = position.quantity
         return positions
+
+    async def _weight_overlay_step(
+        self, session, run: StrategyRun, strategy: Strategy, user: User,
+        provider: MarketDataProvider, account, universe: Sequence[str],
+        bars_by_symbol: Mapping[str, list], day: date, placed: int,
+        risk_cfg: RiskConfig, cooldown: CooldownState,
+        peaks: dict[str, Decimal],
+    ) -> int:
+        """Run-level overlay on one weight-run bar: close what broke its stop.
+
+        The判定 comes from ``evaluate_quote_overlay`` — the same function the
+        single-symbol live path calls — fed with the ledger's ``avg_price`` as the
+        entry and the run's per-symbol peak. The bar's ``low``/``high`` stand in
+        for the quote's two sides, exactly as the single-symbol path does
+        ("tick=bar replay"), so one config cannot mean two things on two tracks.
+
+        A symbol with **no bar on this day** is not judged: no price, no trigger
+        (the backtest's rule, and the reason a halted name is not force-sold at
+        a stale close).
+        """
+        bars_today: dict[str, object] = {}
+        for symbol in universe:
+            for bar in reversed(bars_by_symbol.get(symbol) or []):
+                if _bar_date(bar) == day:
+                    bars_today[symbol] = bar
+                    break
+
+        instructions: list[Instruction] = []
+        triggers: list[dict] = []
+        held: dict[str, tuple[Decimal, Decimal | None]] = {}
+        for symbol in universe:
+            instrument = provider.get_instrument(symbol)
+            instrument_id = (
+                instrument.symbol_id if instrument is not None else f"{symbol}.SIM"
+            )
+            position = await PositionRepository(session).get(account.id, instrument_id)
+            if position is None or position.quantity == 0:
+                peaks.pop(symbol, None)
+                continue
+            held[symbol] = (position.quantity, position.avg_price)
+            bar = bars_today.get(symbol)
+            if bar is None:
+                continue
+            trigger = evaluate_quote_overlay(
+                risk_cfg, symbol, "SELL",
+                entry_price=position.avg_price,
+                peak_value=peaks.get(symbol),
+                quote_bid=bar.low,
+                quote_ask=bar.high,
+            )
+            if trigger is None:
+                continue
+            triggers.append({
+                "date": day.isoformat(),
+                "symbol": trigger.symbol,
+                "kind": trigger.kind,
+                "trigger_level": str(trigger.trigger_level),
+                "fill_price": str(trigger.fill_price),
+                "detail": trigger.detail,
+            })
+            instructions.append(Instruction(
+                symbol=symbol, side="SELL", quantity=position.quantity,
+                price=trigger.fill_price, requested_quantity=position.quantity,
+            ))
+            cooldown.arm(symbol, risk_cfg.cooldown_bars)
+            peaks.pop(symbol, None)
+
+        if instructions:
+            placed, _outcomes = await self._place_weight_instructions(
+                session, run, strategy, user, account, instructions, day, placed,
+            )
+            # 留痕与下单同批写：一份"说触发了但没落单"的记录比没有记录更糟。
+            # 不新增事件类型——单标的轨触发时也只写 run.params（形状对齐）。
+            existing = list((run.params or {}).get("risk_triggers") or [])
+            run.params = {
+                **(run.params or {}),
+                "risk_triggers": [*existing, *triggers],
+            }
+
+        # 峰值按 close 推进（与单标的轨一致）；当日无 bar 的标的沿用上一峰值。
+        for symbol, (_qty, _avg) in held.items():
+            bar = bars_today.get(symbol)
+            if bar is None:
+                continue
+            mark = bar.close
+            peaks[symbol] = mark if symbol not in peaks else max(peaks[symbol], mark)
+        return placed
 
     async def _actual_weight_weights(
         self, session, provider: MarketDataProvider, account,
