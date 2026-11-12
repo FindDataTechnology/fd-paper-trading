@@ -12,8 +12,10 @@ weight-mode backtest / in-out-of-sample split), now executed on real data:
 - IC: cross-sections at ≥3 rebalance dates, Spearman IC of factor rank vs
   forward 20-trading-day return; mean/IR recorded;
 - layering: top/bottom quantile spread + monotonicity across 5 layers;
-- weight backtest: equal-weight top-N and score-weighted targets through the
-  REAL weight-mode backtester (COMPLETED, trades > 0);
+- weight backtest: equal-weight top-N targets through the REAL weight-mode
+  backtester (COMPLETED, trades > 0). The score-weighted track lives in
+  ``weight_backtest_topN.py`` (``FACTOR_WEIGHT_SCHEME=score``) — this script's
+  own run path is equal-weight only, and its earlier docstring claimed otherwise;
 - in/out-of-sample: explicit time split, scan-style best marked in-sample;
 - point-in-time discipline: prices end at the decision date (no lookahead —
   forward returns are computed per cross-section AFTER the decision date, which

@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
-"""2.3 real-engine execution: top-N equal-weight targets through replay_weights.
+"""2.3 real-engine execution: top-N targets through replay_weights.
 
-Separate from the probe script so the acceptance evidence is one clean run:
+Two weight sources, because `factor-real-cross-section` item 3 requires both to
+actually execute: equal weight, and score-proportional (shares ∝ score — the rule
+the factor suite documents; never an optimizer).
 
+    # equal weight (the original acceptance run)
     FD_OPEN_DATA_DSN=$FD_OPEN_DATA_DSN FACTOR_TOP_CODES=000908,002553,... \
       uv run python scripts/weight_backtest_topN.py \
       > ../openspec/changes/add-trading-real-data-closeout/reports/weight-backtest-topN.txt
+
+    # score weight: scores come from the factor cross-section, never invented here
+    FD_OPEN_DATA_DSN=... FACTOR_TOP_CODES=... FACTOR_WEIGHT_SCHEME=score \
+      FACTOR_SCORES=000908:0.91,002553:0.77,... \
+      uv run python scripts/weight_backtest_topN.py > .../weight-backtest-topN-score.txt
+
+`FACTOR_SCORES` is mandatory in score mode: a script that derived scores from
+rank order would be producing evidence for a rule nobody actually ran.
 """
 
 import asyncio
@@ -17,16 +28,60 @@ from decimal import Decimal
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from fd_paper_trading.marketdata.astock import AstockMarketDataProvider  # noqa: E402
+from fd_paper_trading.strategy.allocation import score_proportional_weights  # noqa: E402
 from fd_paper_trading.strategy.spec import Rebalance, WeightSpec  # noqa: E402
 from fd_paper_trading.strategy.weight_backtester import replay_weights  # noqa: E402
 
 END = date(2026, 7, 10)  # the astock_daily anchor (data ends there)
+
+#: Weight sources the acceptance run can execute. `score` needs explicit scores.
+SCHEMES = ("equal", "score")
+
+
+def resolve_scheme(raw: str | None) -> str:
+    """Normalize ``FACTOR_WEIGHT_SCHEME`` or raise on anything unrecognized.
+
+    Fail-fast matters here: a typo must not fall through to equal weight and then
+    be filed as "score-weighted evidence". The caller turns the ValueError into a
+    non-zero exit, so a bad config never produces a report.
+    """
+    scheme = (raw or "equal").strip().lower()
+    if scheme not in SCHEMES:
+        raise ValueError(f"FACTOR_WEIGHT_SCHEME={raw!r} 只接受 {' | '.join(SCHEMES)}")
+    return scheme
+
+
+def parse_scores(raw: str | None) -> dict[str, float]:
+    """Parse ``code:score,code:score`` into ``{code: score}``.
+
+    A malformed entry raises instead of being skipped: dropping one name changes
+    the universe the evidence claims to have tested.
+    """
+    scores: dict[str, float] = {}
+    for part in (raw or "").split(","):
+        if not part.strip():
+            continue
+        code, _, value = part.partition(":")
+        if not code.strip() or not value.strip():
+            raise ValueError(f"FACTOR_SCORES 条目要 code:score，收到 {part!r}")
+        try:
+            scores[code.strip()] = float(value)
+        except ValueError as exc:
+            raise ValueError(f"FACTOR_SCORES 的分数不是数：{part!r}") from exc
+    return scores
 
 
 async def main() -> int:
     dsn = os.environ.get("FD_OPEN_DATA_DSN") or os.environ.get("ASTOCK_DSN")
     codes = [c for c in os.environ.get("FACTOR_TOP_CODES", "").split(",") if c]
     decision = os.environ.get("FACTOR_DECISION_DATE", "2025-09-30")
+    # 配置先解析、再连库：坏配置不该等十个网络往返之后才报。
+    try:
+        scheme = resolve_scheme(os.environ.get("FACTOR_WEIGHT_SCHEME"))
+        scores = parse_scores(os.environ.get("FACTOR_SCORES")) if scheme == "score" else {}
+    except ValueError as exc:
+        print(f"FAIL: {exc}")
+        return 2
     if not dsn or len(codes) < 5:
         print("FAIL: need DSN and >= 5 codes (FACTOR_TOP_CODES)")
         return 2
@@ -42,8 +97,17 @@ async def main() -> int:
     if n < 5:
         print(f"FAIL: only {n} names have bars >= 5")
         return 1
-    w = round(0.9 / n, 4)
-    weights = {c: w for c in universe}
+    if scheme == "score":
+        missing = [c for c in universe if c not in scores]
+        if missing:
+            print(f"FAIL: FACTOR_SCORES 缺 {len(missing)} 个在册标的：{missing[:5]}")
+            return 2
+        weights = score_proportional_weights(scores, budget=0.9, universe=universe)
+        label = f"score-proportional top{n} (0.9 预算按分数占比)"
+    else:
+        w = round(0.9 / n, 4)
+        weights = {c: w for c in universe}
+        label = f"top{n} equal-weight {w}"
     axis = sorted({
         datetime.fromtimestamp(b.ts, tz=timezone.utc).date().isoformat()
         for c in universe for b in bars_by_symbol[c]
@@ -54,8 +118,9 @@ async def main() -> int:
         rebalance=Rebalance(every_n_bars=10),
         weights_series={d: dict(weights) for d in rebalance_dates},
     )
-    print(f"== weight-mode backtest REAL ENGINE (top{n} equal-weight {w}) ==")
+    print(f"== weight-mode backtest REAL ENGINE ({label}) ==")
     print(f"   universe: {universe}")
+    print(f"   weights: {dict(sorted(weights.items(), key=lambda kv: -kv[1]))}")
     print(f"   window: {start}..{END} (decision {decision}, rebalances every 10 bars)")
     print(f"   rebalance dates: {len(rebalance_dates)}")
     result = replay_weights(spec, bars_by_symbol, Decimal("100000"))
