@@ -734,6 +734,21 @@ async def start_backtest(
         # 而"用户显式关掉了成本"与"这个请求根本没有成本字段"是两个不同的事实。
         params["cost_model"] = payload.cost_model.model_dump(mode="json")
     if payload.risk is not None:
+        # 权重（多标的）轨没有 overlay 通道：`replay_weights` 只收
+        # risk_thresholds（组合门），**不收 risk**。所以这里必须显式拒绝——
+        # 收下再忽略等于给出一份"带止损"的记录而实际没有任何止损，正是本仓
+        # 纪律禁止的沉默谎言（成本模型那段同款判据）。
+        if weight_spec is not None:
+            raise APIError(
+                "risk_not_supported_on_weight_track",
+                "the risk overlay (stop_loss_pct / trailing_stop_pct / "
+                "cooldown_bars) is not yet supported on the weight (multi-symbol) "
+                "track: the weight replay has no overlay pass, so accepting it "
+                "would silently drop it. Express the stop in weights_series "
+                "(write that symbol's weight to 0 on the trigger date), or run a "
+                "single-symbol strategy.",
+                400,
+            )
         # Same snapshot rule as costs (design: 配置快照进结果): "带止损的 run"
         # 与"没配风控的 run"的差异必须可归因（spec: Overlay provenance is
         # recorded）。校验（范围）在 RiskConfig 构造时做。
@@ -888,6 +903,26 @@ async def start_paper_run(
         params = {"universe": universe}
     else:
         params = {"symbol": strategy.spec.get("symbol")}
+    if payload.risk is not None:
+        # 权重轨 live 只消费"冷却"（effective_target_weight），**没有任何地方触发
+        # 止损、也没有地方上冷却**——收下这个配置等于让用户以为持仓受保护。所以
+        # 与回测同一个判据：多标的轨显式拒绝，单标的轨才接受。
+        if weight_spec is not None:
+            raise APIError(
+                "risk_not_supported_on_weight_track",
+                "the risk overlay (stop_loss_pct / trailing_stop_pct / "
+                "cooldown_bars) is not yet supported on the weight (multi-symbol) "
+                "track: the live weight path only applies a cooldown that nothing "
+                "arms, so no stop would ever fire. Express the stop in "
+                "weights_series, or run a single-symbol strategy.",
+                400,
+            )
+        # 与回测同一条快照规则：run 记录要能回答"这次带了什么止损"，且"用户显式
+        # 没配"与"这个请求根本没有该字段"是两个不同事实。范围校验在构造
+        # RiskConfig 时做（越界直接 400，而不是起跑后每根 bar 静默无效）。
+        # 单标的 live 侧不需要改动——runner 里本来就读 run.params["risk"]。
+        RiskConfig.from_dict(payload.risk.model_dump(mode="json"))
+        params["risk"] = payload.risk.model_dump(mode="json")
     if payload.risk_thresholds is not None:
         # 只有 weight 轨有"组合"，单标的轨的权重恒为 0/1，过门没有意义。
         params["risk_thresholds"] = {

@@ -129,8 +129,12 @@ async def _make_strategy(client, h, spec=_DCA, name="dca"):
     return r.json()
 
 
-async def _make_run_db(app, strategy_id, account_id) -> uuid.UUID:
-    """Create a STARTING PAPER run row directly (no spawned task)."""
+async def _make_run_db(app, strategy_id, account_id, params_extra=None) -> uuid.UUID:
+    """Create a STARTING PAPER run row directly (no spawned task).
+
+    ``params_extra`` 落进 run.params，用来模拟"起跑时带了 run 级 risk 覆盖"
+    这类入口写入的字段（路由侧写的就是同一个键）。
+    """
     async with app.state.db.session_factory() as session:
         strat = await session.get(Strategy, strategy_id)
         run = StrategyRun(
@@ -139,7 +143,7 @@ async def _make_run_db(app, strategy_id, account_id) -> uuid.UUID:
             mode=StrategyRunMode.PAPER,
             account_id=account_id,
             status=StrategyRunStatus.STARTING,
-            params={"symbol": strat.spec.get("symbol")},
+            params={"symbol": strat.spec.get("symbol"), **(params_extra or {})},
         )
         session.add(run)
         await session.commit()
@@ -991,3 +995,143 @@ async def test_template_capped_signal_keeps_its_reason(client, app):
     assert all("daily order cap" in (t["outcome_reason"] or "") for t in tickets), \
         [t["outcome_reason"] for t in tickets]
     assert all(t["order_id"] is None for t in tickets)
+
+
+# ---------------------------------------------------------------------------
+# run 级 risk 覆盖的入口与生效（2026-11-12：补齐 start_strategy 的入口）
+#
+# 引擎侧本来就支持（runner 两条轨都读 run.params["risk"]），但**入口不存在**：
+# PaperRunRequest 没有 risk 字段，于是 live 永远配不上止损。以下三条把
+# 「入口写得进 params」「不传就不留痕」「越界当场拒」钉住，第四条把「写进去真会平仓」
+# 钉住——这一条此前一条测试都没有。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_run_persists_risk_overlay_on_params(client, app):
+    """带了 risk → 起跑即快照进 run.params（可事后归因"这轮带过止损"）。"""
+    await _wire(app)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h)
+
+    r = await client.post(
+        f"/api/v1/strategies/{strat['id']}/runs",
+        json={"account_id": str(account_id),
+              "risk": {"stop_loss_pct": "0.08", "cooldown_bars": 2}},
+        headers=h,
+    )
+    assert r.status_code == 202, r.text
+    body = r.json()
+    # 快照是 JSON 形态：Decimal 序列化成字符串（"0.08"），比较前先转 float。
+    assert float(body["params"]["risk"]["stop_loss_pct"]) == pytest.approx(0.08)
+    assert body["params"]["risk"]["cooldown_bars"] == 2
+
+    await client.post(f"/api/v1/strategy-runs/{body['id']}/stop", headers=h)
+
+
+@pytest.mark.asyncio
+async def test_start_run_without_risk_leaves_no_snapshot(client, app):
+    """不传 → params 里没有 risk 键（"没配"与"配了空"是两个事实）。"""
+    await _wire(app)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h)
+
+    r = await client.post(
+        f"/api/v1/strategies/{strat['id']}/runs",
+        json={"account_id": str(account_id)},
+        headers=h,
+    )
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert "risk" not in body["params"], body["params"]
+
+    await client.post(f"/api/v1/strategy-runs/{body['id']}/stop", headers=h)
+
+
+@pytest.mark.asyncio
+async def test_start_run_out_of_range_risk_is_refused(client, app):
+    """越界止损（>1）当场拒，而不是起跑后每根 bar 静默无效。"""
+    await _wire(app)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h)
+
+    r = await client.post(
+        f"/api/v1/strategies/{strat['id']}/runs",
+        json={"account_id": str(account_id), "risk": {"stop_loss_pct": "1.5"}},
+        headers=h,
+    )
+    assert r.status_code in (400, 422), r.text
+    assert "stop_loss_pct" in r.text
+
+
+@pytest.mark.asyncio
+async def test_live_risk_overlay_closes_the_position_on_a_gap_bar(client, app):
+    """带 10% 止损起跑，丢一根崩盘 bar → 真的要平仓，且 trigger 留痕。
+
+    这条是这一组的价值所在：在此之前 `run.params["risk"]` 在 live 上**零测试覆盖**，
+    "live 逐 bar 执行止损"只是代码注释与规格里的一句话。
+    """
+    provider = await _wire(app)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h)
+    run_id = await _make_run_db(
+        app, uuid.UUID(strat["id"]), account_id,
+        params_extra={"risk": {"stop_loss_pct": "0.10"}},
+    )
+
+    sup = app.state.strategy_runner
+    await sup._tick_once(run_id)  # 首次 tick：预热 + 在最新那根 bar 上建仓
+
+    orders = await _orders_for_run(client, h, account_id, run_id)
+    assert any(o["side"] == "BUY" for o in orders), \
+        f"前提不成立：起跑后没有多头持仓，止损无从触发 {[o['side'] for o in orders]}"
+
+    # 崩盘 bar：low 69 远低于止损价（成本 ~104 × 0.9）
+    crash_ts = int(datetime(2026, 1, 6, tzinfo=UTC).timestamp())
+    provider._bars.append(
+        Bar(
+            ts=crash_ts,
+            open=Decimal("70"),
+            high=Decimal("71"),
+            low=Decimal("69"),
+            close=Decimal("70.5"),
+            volume=Decimal(1000),
+        )
+    )
+    await sup._tick_once(run_id)
+
+    detail = await _run_detail(client, h, run_id)
+    triggers = detail["params"].get("risk_triggers")
+    assert triggers, "止损覆盖没在 live 上生效：run.params 里没有 risk_triggers"
+    assert triggers[-1]["symbol"] == "AAPL"
+    assert triggers[-1]["kind"], triggers[-1]
+
+    orders = await _orders_for_run(client, h, account_id, run_id)
+    assert any(o["side"] == "SELL" for o in orders), \
+        f"止损触发了却没卖出：{[o['side'] for o in orders]}"
+
+
+@pytest.mark.asyncio
+async def test_weight_track_live_refuses_risk_overlay_instead_of_no_op(client, app):
+    """权重轨 live 传止损 → 显式 400（否则是"看着受保护实际没保护"的空转）。
+
+    权重轨 live 只消费冷却（`effective_target_weight`），而**没有任何地方触发
+    止损、也没有地方上冷却**——配置收下就等于骗人。
+    """
+    await _wire(app)
+    h = await _authed(client)
+    account_id = await _make_account(client, h)
+    strat = await _make_strategy(client, h, spec=WEIGHT_SPEC_TWO, name="wr-risk")
+
+    r = await client.post(
+        f"/api/v1/strategies/{strat['id']}/runs",
+        json={"account_id": str(account_id), "risk": {"stop_loss_pct": "0.10"}},
+        headers=h,
+    )
+    assert r.status_code == 400, r.text
+    assert "risk_not_supported_on_weight_track" in r.text
+    assert "weights_series" in r.text

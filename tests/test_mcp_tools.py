@@ -280,3 +280,43 @@ def test_run_backtest_rejects_out_of_range_risk(mcp):
         sid, start.isoformat(), end.isoformat(), risk={"stop_loss_pct": 1.5}
     )
     assert result.get("error") is True, result
+
+
+def test_start_strategy_transmits_risk_overlay(mcp):
+    """`start_strategy(risk=...)` 要把覆盖送到 run.params（live 止损的唯一入口）。
+
+    引擎侧两条轨（单标的 / 权重）早就在读 `run.params["risk"]`，但入口此前不存在，
+    所以 live 永远配不上止损。这条钉住入口；"写进去真会平仓"由
+    `tests/e2e/test_strategy_paper_runs.py::test_live_risk_overlay_closes_the_position_on_a_gap_bar`
+    钉住（那边需要控价，只有 e2e 能做）。
+    """
+    created = mcp_server.create_strategy(name="risk live", spec=DCA_SPEC)
+    sid = created["strategy"]["id"]
+    accounts = mcp_server.list_accounts()
+    if not accounts:
+        r = requests.post(
+            f"{mcp_server.PAPER_TRADING_API_URL}/api/v1/accounts",
+            json={"name": "paper"},
+            headers={"Authorization": f"Bearer {mcp_server.PAPER_TRADING_API_TOKEN}"},
+            timeout=5,
+        )
+        assert r.status_code in (200, 201), r.text
+        accounts = mcp_server.list_accounts()
+    account_id = accounts[0]["id"]
+
+    risk = {"stop_loss_pct": 0.07, "trailing_stop_pct": 0.12, "cooldown_bars": 3}
+    started = mcp_server.start_strategy(sid, account_id, risk=risk)
+    assert started.get("success") is True, started
+    params = started["run"]["params"]
+    # 快照是 JSON 形态：Decimal 序列化成字符串（"0.07"），比较前先转 float。
+    assert float(params["risk"]["stop_loss_pct"]) == pytest.approx(0.07)
+    assert float(params["risk"]["trailing_stop_pct"]) == pytest.approx(0.12)
+    assert params["risk"]["cooldown_bars"] == 3
+
+    mcp_server.stop_strategy(started["run"]["id"])
+
+    # 不传 risk → params 里没有这个键（"没配"与"配了空"是两个事实）。
+    plain = mcp_server.start_strategy(sid, account_id)
+    assert plain.get("success") is True, plain
+    assert "risk" not in plain["run"]["params"], plain["run"]["params"]
+    mcp_server.stop_strategy(plain["run"]["id"])

@@ -330,6 +330,12 @@ class PaperRunRequest(BaseModel):
     #: 组合级风控阈值（change4 3.2）。缺席 = 纸面运行不做组合判定，
     #: 记录与行为都和接入前一致。**判定只留痕、不改写订单**。
     risk_thresholds: RiskThresholdsRequest | None = None
+    #: run 级风控覆盖（stop_loss_pct / trailing_stop_pct / cooldown_bars）。
+    #: live runner **早就在读** ``run.params["risk"]``：单标的轨触发后按当根价
+    #: 卖出、权重轨把该标的有效目标权重归零并记 ``effective_weights``——所以这个
+    #: 字段只是把既有能力接出入口，不改任何执行语义。缺席 = 无覆盖，行为与接入前
+    #: 逐字节一致（与回测同一条"存在才写快照"的规则）。
+    risk: RiskModelRequest | None = None
 
 
 # ---------------------------------------------------------------------------

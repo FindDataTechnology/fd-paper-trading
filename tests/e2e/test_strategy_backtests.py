@@ -430,3 +430,25 @@ async def test_partial_thresholds_surface_as_unavailable_not_ok(client, auth_hea
     assert done["status"] == "COMPLETED", done.get("error")
     statuses = {e["verdict"]["status"] for e in done["params"]["risk_events"]}
     assert statuses == {"unavailable"}, statuses
+
+
+@pytest.mark.asyncio
+async def test_weight_track_refuses_risk_overlay_instead_of_dropping_it(
+    client, auth_headers
+):
+    """权重轨没有 overlay 通道 → 显式 400，而不是收下再静默丢弃。
+
+    `replay_weights` 只收 `risk_thresholds`（组合门），**不收** `risk`。此前
+    权重轨传止损会被静默忽略：run 记录看起来"带了止损"，实际一笔都没保护。
+    这条与成本模型那条同款判据（沉默谎言），只是止损这侧此前没有守卫。
+    """
+    headers = await auth_headers()
+    sid = await _make_strategy(client, headers, spec=WEIGHT_SPEC_RISK)
+    r = await client.post(
+        f"/api/v1/strategies/{sid}/backtests",
+        json={**_risk_window(), "risk": {"stop_loss_pct": "0.10"}},
+        headers=headers,
+    )
+    assert r.status_code == 400, r.text
+    assert "risk_not_supported_on_weight_track" in r.text
+    assert "weights_series" in r.text, "拒绝文案必须给出替代路径"
