@@ -15,6 +15,10 @@ WORKDIR /app
 # uv for fast locked installs; no cache kept in the image.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 COPY pyproject.toml uv.lock README.md LICENSE alembic.ini ./
+# Served verbatim at /.well-known/line-manifest.json. It lives at the repo
+# root and `uv sync` only installs the package into /app/.venv, so without
+# this line WORKDIR /app has no manifest and the endpoint would 404.
+COPY line-manifest.json ./
 COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY --from=webbuild /build/dist ./web/dist

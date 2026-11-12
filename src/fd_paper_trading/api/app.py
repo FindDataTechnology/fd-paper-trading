@@ -14,6 +14,7 @@ from ..marketdata import MarketDataProvider, build_market_data_provider
 from ..persistence.base import Database, create_database
 from ..realtime import ConnectionManager
 from ..strategy.runner import PaperRunSupervisor
+from ..wellknown import register as register_well_known
 from .errors import (
     APIError,
     api_error_handler,
@@ -149,6 +150,12 @@ def create_app(
             except Exception:  # noqa: BLE001 — 自报态绝不影响健康面本体
                 pass
         return {"status": "ok"}
+
+    # ---- Line self-description (converge-line-identity-and-keys 1.4) ----
+    # MUST be registered before the SPA catch-all below: FastAPI matches in
+    # registration order, and a later route loses to /{full_path:path} — the
+    # production pod currently answers this path with index.html (fake green).
+    register_well_known(app)
 
     # ---- MCP surface (streamable HTTP, same process/port) ----
     # Mounted before the SPA fallback so /mcp is not shadowed. Local stdio
