@@ -468,6 +468,8 @@ def run_backtest(
     start: str,
     end: str,
     initial_cash: Decimal = Decimal("100000"),
+    risk: dict | None = None,
+    cost_model: dict | None = None,
 ) -> dict:
     """Start a backtest of a strategy over a daily-bar window.
 
@@ -479,12 +481,35 @@ def run_backtest(
         start: Window start date, ISO format (e.g. "2025-01-01")
         end: Window end date, ISO format
         initial_cash: Starting cash for the simulated portfolio
+        risk: Optional run-level risk overlay — ``stop_loss_pct`` /
+            ``trailing_stop_pct`` (fractions in (0,1)) and ``cooldown_bars``
+            (int). When present the engine closes a position whose stop fires
+            (bar ``low`` for backtests, gap-aware fill at the worse of the stop
+            price and that bar's open) and zeroes that symbol's effective
+            target weight for ``cooldown_bars`` rebalance points; the snapshot
+            records ``effective_weights`` next to ``target_weights`` so the
+            difference is attributable. Omitted = no overlay at all (the
+            absent/disabled distinction is preserved on purpose: the API stores
+            a snapshot only when the field is sent).
+        cost_model: Optional cost model — ``enabled`` plus
+            ``commission_rate`` / ``stamp_tax_rate`` / ``slippage_bps``
+            (A-share defaults). Defaults to disabled, so a call that omits it
+            prices the backtest at zero cost. The weight (multi-symbol) track
+            rejects a cost model by design; it applies on the single-symbol
+            track.
 
     Returns:
         The run (status QUEUED, pinned strategy_version) on success;
-        error dict on failure (e.g. window over the group limit).
+        error dict on failure (e.g. window over the group limit, risk values
+        out of range).
     """
-    payload = {"start": start, "end": end, "initial_cash": float(initial_cash)}
+    payload: dict = {"start": start, "end": end, "initial_cash": float(initial_cash)}
+    # 只在显式给出时才放进 payload：路由层把"没有这个字段"与"显式 enabled=false"
+    # 当成两个不同事实（快照只在字段存在时写），无条件塞默认值会抹掉这个区别。
+    if risk is not None:
+        payload["risk"] = risk
+    if cost_model is not None:
+        payload["cost_model"] = cost_model
     success, data = _api_call("POST", f"/api/v1/strategies/{strategy_id}/backtests", json_data=payload)
     if success:
         return {"success": True, "run": data,

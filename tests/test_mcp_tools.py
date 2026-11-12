@@ -213,3 +213,70 @@ def test_start_stop_strategy_round_trip(mcp):
     assert detail["started_at"]
     assert detail["stopped_at"]
     assert any(e["type"] == "state_change" for e in detail["events"])
+
+
+def _wait_terminal(run_id: str, timeout_polls: int = 200) -> dict:
+    for _ in range(timeout_polls):
+        detail = mcp_server.get_strategy_run(run_id)
+        if detail["status"] in ("COMPLETED", "FAILED"):
+            return detail
+        time.sleep(0.05)
+    raise AssertionError(f"run {run_id} did not reach a terminal state")
+
+
+def test_run_backtest_transmits_risk_and_cost_model(mcp):
+    """risk / cost_model 必须真的送进 HTTP 请求，而不是只写在文档里。
+
+    判据放在 **run.params 快照**上：路由层只在字段存在时写快照（"没有这个字段"
+    与"显式 enabled=false"是两个不同事实），所以 params 里出现这两个键，就证明
+    MCP 工具确实透传了；反过来，不传时 params 里不该出现。
+    """
+    from datetime import date, timedelta
+
+    created = mcp_server.create_strategy(name="risk bt", spec=DCA_SPEC)
+    sid = created["strategy"]["id"]
+    end = date.today()
+    start = end - timedelta(days=20)
+
+    risk = {"stop_loss_pct": 0.05, "trailing_stop_pct": 0.10, "cooldown_bars": 2}
+    cost = {"enabled": True, "commission_rate": 0.00025,
+            "stamp_tax_rate": 0.0005, "slippage_bps": 5}
+
+    started = mcp_server.run_backtest(
+        sid, start.isoformat(), end.isoformat(), risk=risk, cost_model=cost
+    )
+    assert started["success"] is True, started
+    # 起始返回体就该带快照——不必等回测跑完才能证明透传。
+    params = started["run"]["params"]
+    # 快照是 JSON 形态：Decimal 序列化成字符串（"0.05"），比较前先转 float。
+    assert float(params["risk"]["stop_loss_pct"]) == pytest.approx(0.05)
+    assert float(params["risk"]["trailing_stop_pct"]) == pytest.approx(0.10)
+    assert params["risk"]["cooldown_bars"] == 2
+    assert params["cost_model"]["enabled"] is True
+    assert float(params["cost_model"]["slippage_bps"]) == pytest.approx(5)
+
+    # 反向：不传就不该凭空出现（否则"显式关掉成本"与"根本没配"会被抹平）。
+    plain = mcp_server.run_backtest(sid, start.isoformat(), end.isoformat())
+    assert plain["success"] is True, plain
+    plain_params = plain["run"]["params"]
+    assert "risk" not in plain_params
+    assert "cost_model" not in plain_params
+
+    # 让后台任务收尾，避免残留运行干扰同文件其他用例。
+    _wait_terminal(started["run"]["id"])
+    _wait_terminal(plain["run"]["id"])
+
+
+def test_run_backtest_rejects_out_of_range_risk(mcp):
+    """越界的止损值必须被服务端拒掉，且错误回给调用方——不是静默忽略。"""
+    from datetime import date, timedelta
+
+    created = mcp_server.create_strategy(name="bad risk bt", spec=DCA_SPEC)
+    sid = created["strategy"]["id"]
+    end = date.today()
+    start = end - timedelta(days=20)
+
+    result = mcp_server.run_backtest(
+        sid, start.isoformat(), end.isoformat(), risk={"stop_loss_pct": 1.5}
+    )
+    assert result.get("error") is True, result
