@@ -26,8 +26,9 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, os.path.dirname(__file__))  # 同目录的 _evidence_source
 
-from fd_paper_trading.marketdata.astock import AstockMarketDataProvider  # noqa: E402
+from _evidence_source import EvidenceSourceError, open_provider  # noqa: E402
 from fd_paper_trading.strategy.allocation import score_proportional_weights  # noqa: E402
 from fd_paper_trading.strategy.spec import Rebalance, WeightSpec  # noqa: E402
 from fd_paper_trading.strategy.weight_backtester import replay_weights  # noqa: E402
@@ -72,7 +73,6 @@ def parse_scores(raw: str | None) -> dict[str, float]:
 
 
 async def main() -> int:
-    dsn = os.environ.get("FD_OPEN_DATA_DSN") or os.environ.get("ASTOCK_DSN")
     codes = [c for c in os.environ.get("FACTOR_TOP_CODES", "").split(",") if c]
     decision = os.environ.get("FACTOR_DECISION_DATE", "2025-09-30")
     # 配置先解析、再连库：坏配置不该等十个网络往返之后才报。
@@ -82,10 +82,14 @@ async def main() -> int:
     except ValueError as exc:
         print(f"FAIL: {exc}")
         return 2
-    if not dsn or len(codes) < 5:
-        print("FAIL: need DSN and >= 5 codes (FACTOR_TOP_CODES)")
+    if len(codes) < 5:
+        print("FAIL: need >= 5 codes (FACTOR_TOP_CODES)")
         return 2
-    provider = AstockMarketDataProvider(dsn=dsn)
+    try:
+        provider = open_provider()
+    except EvidenceSourceError as exc:
+        print(f"FAIL: {exc}")
+        return 2
     start = (date.fromisoformat(decision) - timedelta(days=7)).isoformat()
     bars_by_symbol = {}
     for code in codes[:10]:
@@ -150,4 +154,9 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    try:
+        raise SystemExit(asyncio.run(main()))
+    except (OSError, ConnectionError) as exc:
+        # 连不上就说连不上：裸 traceback 会被读成"脚本坏了/数据有问题"。
+        print(f"FAIL: 价格库不可达（DSN 的主机/端口连不上）：{type(exc).__name__}: {exc}")
+        raise SystemExit(2) from exc

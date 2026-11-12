@@ -36,6 +36,9 @@ import sys
 from decimal import Decimal
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, os.path.dirname(__file__))  # 同目录的 _evidence_source
+
+from _evidence_source import EvidenceSourceError, open_provider  # noqa: E402
 
 from fd_paper_trading.marketdata.astock import AstockMarketDataProvider  # noqa: E402
 from fd_paper_trading.strategy.risk_overlay import RiskConfig  # noqa: E402
@@ -85,11 +88,11 @@ def _ranks(xs):
 
 
 async def main() -> int:
-    dsn = os.environ.get(DSN_ENV)
-    if not dsn:
-        print("FAIL: no read-only DSN")
+    try:
+        provider = open_provider()
+    except EvidenceSourceError as exc:
+        print(f"FAIL: {exc}")
         return 2
-    provider = AstockMarketDataProvider(dsn=dsn)
 
     async def fetch(sql, *args):
         return await provider._fetch(sql, *args)
@@ -299,19 +302,22 @@ def json_line(executable: bool, item: str, reason: str) -> str:
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    try:
+        raise SystemExit(asyncio.run(main()))
+    except (OSError, ConnectionError) as exc:
+        # 连不上就说连不上：裸 traceback 会被读成"脚本坏了/数据有问题"。
+        print(f"FAIL: 价格库不可达（DSN 的主机/端口连不上）：{type(exc).__name__}: {exc}")
+        raise SystemExit(2) from exc
 
 
-async def run_weight_backtest(dsn: str, top_codes: list[str], decision_date: str) -> int:
+async def run_weight_backtest(provider, top_codes: list[str], decision_date: str) -> int:
     """2.3 real engine execution: top-N equal-weight targets through
     replay_weights (COMPLETED, trades > 0, snapshot vs fills reconciled)."""
-    from fd_paper_trading.marketdata.astock import AstockMarketDataProvider
     from fd_paper_trading.strategy.spec import Rebalance, WeightSpec
     from fd_paper_trading.strategy.weight_backtester import replay_weights
     from decimal import Decimal
     from datetime import date, timedelta
 
-    provider = AstockMarketDataProvider(dsn=dsn)
     end = date(2026, 7, 10)
     start = (date.fromisoformat(decision_date) - timedelta(days=7)).isoformat()
     bars_by_symbol = {}
@@ -368,8 +374,12 @@ async def run_weight_backtest(dsn: str, top_codes: list[str], decision_date: str
 
 
 if __name__ == "__main__" and os.environ.get("FACTOR_RUN_WEIGHT") == "1":
-    _dsn = os.environ.get("FD_OPEN_DATA_DSN") or os.environ.get("ASTOCK_DSN")
     _codes = os.environ.get("FACTOR_TOP_CODES", "").split(",")
+    try:
+        _provider = open_provider()
+    except EvidenceSourceError as exc:
+        print(f"FAIL: {exc}")
+        raise SystemExit(2) from exc
     raise SystemExit(asyncio.run(run_weight_backtest(
-        _dsn, [c for c in _codes if c][:10], os.environ.get(
+        _provider, [c for c in _codes if c][:10], os.environ.get(
             "FACTOR_DECISION_DATE", "2025-09-30"))))
