@@ -157,3 +157,50 @@ def test_score_series_rebalances_to_a_new_ranking() -> None:
 
     assert int(result.stats.get("trade_count") or 0) > 0
     assert result.snapshots[-1].target_weights["B"] == pytest.approx(second["B"], abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# 分层规模下限：spec 要求「5 层、每层 ≥5 只」，只断言"5 层都在"是假绿
+# ---------------------------------------------------------------------------
+
+
+def _layer_sizes(common: list[str], fwd: dict[str, float], n_layers: int = 5) -> list[int]:
+    """照抄证据脚本里的切片与"有效成员"数法，用来钉住它的语义。
+
+    切片末层吃余数（`common[4*size:]`），而规模按**有前瞻收益的成员数**算——
+    两者不是一回事：切片里有名字、但缺前瞻收益时，均值是用更小样本算的。
+    """
+    n = len(common)
+    layer_size = n // n_layers
+    sizes = []
+    for layer in range(n_layers):
+        members = common[layer * layer_size:(layer + 1) * layer_size] \
+            if layer < n_layers - 1 else common[(n_layers - 1) * layer_size:]
+        sizes.append(sum(1 for e in members if e in fwd))
+    return sizes
+
+
+def test_layer_floor_passes_when_every_layer_has_five() -> None:
+    common = [f"E{i:02d}" for i in range(30)]
+    fwd = {e: 0.01 for e in common}
+    sizes = _layer_sizes(common, fwd)
+    assert sizes == [6, 6, 6, 6, 6]
+    assert min(sizes) >= 5
+
+
+def test_layer_floor_fails_when_a_layer_is_starved() -> None:
+    """12 只切 5 层 → 每层 2 只。老断言（5 层都有均值）照样 PASS，新门必须红。"""
+    common = [f"E{i:02d}" for i in range(12)]
+    fwd = {e: 0.01 for e in common}
+    sizes = _layer_sizes(common, fwd)
+    assert sizes == [2, 2, 2, 2, 4]
+    assert min(sizes) < 5, "每层只有 2 只却通过了规模下限：门是假的"
+
+
+def test_layer_size_counts_only_members_with_forward_returns() -> None:
+    """切片里有名字但缺前瞻收益时，规模按有效成员算（不是切片长度）。"""
+    common = [f"E{i:02d}" for i in range(30)]
+    fwd = {e: 0.01 for e in common[:26]}  # 最后 4 只没有前瞻收益
+    sizes = _layer_sizes(common, fwd)
+    assert sizes[-1] == 2, sizes  # 末层 6 个名字里只有 2 个有效
+    assert min(sizes) < 5

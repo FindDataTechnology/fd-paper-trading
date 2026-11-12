@@ -51,6 +51,9 @@ DECISION_DATES = ["2024-12-31", "2025-03-31", "2025-06-30", "2025-09-30"]
 FORWARD_WINDOW_DAYS = 20      # forward return horizon, trading days
 UNIVERSE_CAP = 300            # top-N by data completeness for tractability
 TOP_N = 30                    # long basket size
+#: spec `factor-real-cross-section` 的规模下限：5 层、每层 ≥5 只。单列常量而不是
+#: 散在比较式里——同一个 5 写在两处，改一处就会静默分叉。
+MIN_PER_LAYER = 5
 
 
 def _spearman(xs, ys):
@@ -203,18 +206,30 @@ async def main() -> int:
         n = len(common)
         layer_size = n // 5
         layer_means = []
+        layer_sizes = []
         for layer in range(5):
             members = common[layer * layer_size:(layer + 1) * layer_size] \
                 if layer < 4 else common[4 * layer_size:]
             rets = [fwd_returns[last_dd][e] for e in members if e in fwd_returns[last_dd]]
             layer_means.append(statistics.mean(rets) if rets else None)
+            # 每层的**有效**成员数（真的有前瞻收益的那些），不是切片长度：
+            # 切片里有名字却缺前瞻收益时均值是用更小样本算的，规模按实际算。
+            layer_sizes.append(len(rets))
         print(f"\n== quintile layering @ {last_dd} (low ROE -> high ROE) ==")
-        for i, m in enumerate(layer_means):
-            print(f"   L{i+1}: {m:+.4f}" if m is not None else f"   L{i+1}: n/a")
+        for i, (m, cnt) in enumerate(zip(layer_means, layer_sizes)):
+            print(f"   L{i+1}: {m:+.4f} (n={cnt})" if m is not None
+                  else f"   L{i+1}: n/a (n={cnt})")
         spread = (layer_means[4] - layer_means[0]) if None not in layer_means else None
         if spread is not None:
             print(f"   Q5-Q1 spread: {spread:+.4f}")
         check("layering produced 5 layers", None not in layer_means)
+        # spec 的规模下限是「5 层、每层 ≥5 只」。只断言"5 层都在"，会让一个每层
+        # 只剩 1 只、均值毫无意义的截面照样 PASS——这条就是那个假绿的门。
+        check(
+            f"every layer has >= {MIN_PER_LAYER} names",
+            bool(layer_sizes) and min(layer_sizes) >= MIN_PER_LAYER,
+            f"sizes={layer_sizes}, floor={MIN_PER_LAYER}",
+        )
 
     # ---- 2.3 weight-mode backtest (equal-weight top-N, real engine) ----
     if last_dd:
