@@ -76,3 +76,49 @@ def test_dunder_through_str_format_is_actually_reachable_without_the_check():
     ns: dict = {"__builtins__": SAFE_BUILTINS}
     exec(compile(src, "<probe>", "exec"), ns)   # noqa: S102 - 自证用途
     assert ns["on_bar"](None) == "builtins", "payload 没拿到属性 ⇒ 这条判据是多余的"
+
+
+# ---- 第二层：受限 builtins 是"静态判据被绕过时"的唯一防线 --------------------
+#
+# 2026-11-13 量过一圈：`getattr` **能通过静态校验**（它不以 `_` 开头、也不在
+# _FORBIDDEN_CALLS 里），但运行时立刻 `NameError`——因为 SAFE_BUILTINS 里没有它。
+# 也就是说 `"".format` 是唯一一条"静态判据是唯一防线"的通道（`str` 是安全内建，
+# 第二层不设防），所以它才被单独修掉；`getattr` 一族靠第二层兜住。
+#
+# 这层防线没有任何测试：谁哪天为了"方便"把 `getattr`/`type`/`vars` 加进
+# SAFE_BUILTINS，沙箱当场变成可逃逸的，而所有既有用例照样全绿。这条钉住它。
+
+_FORBIDDEN_IN_SAFE_BUILTINS = (
+    "getattr", "setattr", "delattr", "hasattr", "vars", "globals", "locals",
+    "eval", "exec", "compile", "open", "input", "breakpoint", "__import__",
+    "type", "super", "object", "dir", "help",
+)
+
+
+def test_safe_builtins_expose_no_attribute_access_or_io():
+    """受限 builtins 里不许出现能取属性、能 IO、能反射的内建。"""
+    from fd_paper_trading.strategy.codegen import SAFE_BUILTINS
+
+    leaked = [n for n in _FORBIDDEN_IN_SAFE_BUILTINS if n in SAFE_BUILTINS]
+    assert not leaked, (
+        f"SAFE_BUILTINS 里出现了 {leaked} —— 这些能让策略代码绕过静态判据："
+        "getattr(x, '__class__') 之类不以 '_' 开头的调用不会被 AST 规则拦住，"
+        "第二层是唯一防线。"
+    )
+
+
+def test_getattr_passes_static_validation_so_layer_two_must_hold():
+    """自证：`getattr(ctx, "_bars")` 静态校验**会放行**——所以第二层必须挡。
+
+    这条不是"应该被静态拦"，而是记录事实：静态规则管不到运行期拼出来的名字。
+    如果哪天静态判据也能拦它，这条会红，那就该把注释和这条一起更新（而不是删掉它）。
+    """
+    assert validate_source('def on_bar(ctx):\n    return getattr(ctx, "_bars")\n') == []
+
+    from fd_paper_trading.strategy.codegen import SAFE_BUILTINS
+
+    ns: dict = {"__builtins__": SAFE_BUILTINS}
+    src = 'def on_bar(ctx):\n    return getattr(ctx, "_bars")\n'
+    exec(compile(src, "<probe>", "exec"), ns)   # noqa: S102 - 自证用途
+    with pytest.raises(NameError):
+        ns["on_bar"](None)
