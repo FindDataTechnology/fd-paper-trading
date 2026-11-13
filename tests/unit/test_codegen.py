@@ -10,6 +10,10 @@ VALID = [
     "def on_bar(ctx):\n    if ctx.closes()[-1] > 100:\n        ctx.buy(2)\n    else:\n        ctx.sell(1)",
     "def helper(x):\n    return x * 2\n\ndef on_bar(ctx):\n    ctx.buy(helper(1))",
     "def on_bar(ctx):\n    s = ctx.sma(10)\n    if s is not None and s > 100:\n        ctx.buy(1, limit_price=99.5)",
+    # 正当的格式化：只有占位符/序号/精度，不带属性或下标
+    'def on_bar(ctx):\n    return "{}".format(ctx.cash)',
+    'def on_bar(ctx):\n    return "{:.2f}".format(ctx.cash)',
+    'def on_bar(ctx):\n    return f"{ctx.cash:.2f}"',
 ]
 
 INVALID = [
@@ -30,6 +34,10 @@ INVALID = [
     ("def on_bar(ctx):\n    vars()", "vars"),
     ("def on_bar(ctx):\n    locals()", "locals"),
     ("def on_bar(ctx:\n    pass", "syntax error"),
+    # 2026-11-13：dunder 躲在 str.format 的字段说明符里逃过 AST 的 Attribute 检查。
+    # 实测这两条**曾经通过校验**，其中第一条运行时真的返回了 'builtins'。
+    ('def on_bar(ctx):\n    return "{0.__class__.__module__}".format(ctx)', "format field"),
+    ('def on_bar(ctx):\n    return "{0[__globals__]}".format(ctx)', "format field"),
 ]
 
 
@@ -53,3 +61,18 @@ def test_strict_raises_with_errors():
 
 def test_strict_passes_on_valid():
     validate_source_strict("def on_bar(ctx):\n    ctx.buy(1)")
+
+
+def test_dunder_through_str_format_is_actually_reachable_without_the_check():
+    """闸的自证：这段源码在**关掉新判据**时确实能拿到模块名。
+
+    只断言"校验器拒了它"是不够的——如果这条 payload 本身无害，那"拒"就是多余的。
+    这里在 SAFE_BUILTINS 下真跑一遍，证明它绕过了「属性不许以下划线开头」这条规则：
+    AST 只看到一个字符串常量，`__class__` 是运行时由 str.format 解析的。
+    """
+    from fd_paper_trading.strategy.codegen import SAFE_BUILTINS
+
+    src = 'def on_bar(ctx):\n    return "{0.__class__.__module__}".format(ctx)\n'
+    ns: dict = {"__builtins__": SAFE_BUILTINS}
+    exec(compile(src, "<probe>", "exec"), ns)   # noqa: S102 - 自证用途
+    assert ns["on_bar"](None) == "builtins", "payload 没拿到属性 ⇒ 这条判据是多余的"

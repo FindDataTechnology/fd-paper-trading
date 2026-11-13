@@ -11,7 +11,15 @@ are validated by ``validate_source``, which enforces a strict allowlist:
 - names and attributes starting with ``_`` are forbidden (dunder/private
   reach into interpreter internals);
 - direct calls to ``eval``/``exec``/``open``/``compile``/``globals``/
-  ``locals``/``vars``/``__import__``/``input``/``breakpoint`` are forbidden.
+  ``locals``/``vars``/``__import__``/``input``/``breakpoint`` are forbidden;
+- **``str.format`` 的字段说明符不许带属性访问或下标**（``"{0.__class__}".format(x)``）。
+
+最后这条是 2026-11-13 补的：`._format` 不以 `_` 开头、也不是被禁调用，而
+``{0.__class__}`` 整段躲在**字符串字面量**里——AST 只看得到一个 Constant，
+于是「任何以下划线开头的属性都拒」这条规则被绕过了。实测
+``"{0.__class__.__module__}".format(ctx)`` 通过校验并返回 ``'builtins'``。
+规格（strategy-sandbox「Dunder access rejected」）要的是"引用即拒"，
+而这里恰恰引用了却没拒。
 
 This runs synchronously at create/update (so an LLM gets immediate, per-violation
 feedback) and again defensively inside the sandbox worker.
@@ -20,6 +28,7 @@ feedback) and again defensively inside the sandbox worker.
 from __future__ import annotations
 
 import ast
+from string import Formatter
 
 #: Entry-point names the sandbox may call, per track.
 ENTRY_POINTS = ("on_bar", "target_weights")
@@ -95,8 +104,40 @@ def validate_source(source: str, entry_point: str = "on_bar") -> list[str]:
             errors.append(
                 f"line {node.lineno}: call to '{node.func.id}' is forbidden"
             )
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            bad = _format_field_violations(node.value)
+            if bad:
+                errors.append(
+                    f"line {node.lineno}: format field {bad!r} reaches attributes/indexes; "
+                    "dunder access through str.format is forbidden"
+                )
 
     return errors
+
+
+_FORMATTER = Formatter()
+
+
+def _format_field_violations(text: str) -> str | None:
+    """字符串字面量里的 ``str.format`` 字段名若带属性/下标，返回该字段名。
+
+    判据刻意只针对**字段说明符**：``"{0.__class__}"`` 会在运行时解析
+    ``__class__``，而 AST 里只有一个 Constant；``"{}"``、``"{0}"``、
+    ``"{:.2f}"`` 都放行（策略代码里正当的格式化就这几种）。
+    下标一并拒掉：``"{0[__globals__]}"`` 是同一个绕过的另一种拼法。
+
+    解析失败（半个花括号等）交给运行时去报错，这里不额外判。
+    """
+    if "{" not in text:
+        return None
+    try:
+        parsed = list(_FORMATTER.parse(text))
+    except ValueError:
+        return None
+    for _literal, field_name, _spec, _conv in parsed:
+        if field_name and ("." in field_name or "[" in field_name):
+            return "{" + field_name + "}"
+    return None
 
 
 def validate_source_strict(source: str, entry_point: str = "on_bar") -> None:
