@@ -94,3 +94,67 @@ async def test_revoked_token_leaves_jwt_valid(client, auth_headers):
     # ...but the revoked API token does not.
     r3 = await client.get("/api/v1/accounts", headers={"Authorization": f"Bearer {plaintext}"})
     assert r3.status_code == 401
+
+
+# ---- 2026-11-13：`user_inactive` 这道门零测试 --------------------------------
+#
+# user-auth 规格两句话：
+#   「An inactive user account MUST return `403` with code `user_inactive`」（登录）
+#   「inactive users MUST be rejected」（bearer 依赖）
+#
+# 实测：三处检查（auth.py 登录、auth/dependencies.py、api/routes/ws.py）都在，
+# 而 `grep user_inactive tests/` 零命中——没有任何测试碰过这个码。
+# 更要紧的是**没有产品入口把 is_active 设成 False**（routes 里没有任何写入点），
+# 所以这道门迄今只可能被直接改库触发，也就一直没人验过它是否真的拦得住。
+# 下面三条用直接改库（唯一存在的路径）把门逼出来：
+#   - 登录：403 user_inactive（规格指定）
+#   - 已签发的 JWT：401（"凭证被拒"，不是"用户不存在"）
+# 两种码不一致是**规格有意的**，一并钉住：将来谁想"统一错误码"，这里会红。
+
+
+async def _set_active(app, email: str, active: bool) -> None:
+    from sqlalchemy import select
+
+    from fd_paper_trading.persistence.models import User
+
+    async with app.state.db.session_factory() as session:
+        user = (await session.execute(
+            select(User).where(User.email == email)
+        )).scalars().first()
+        assert user is not None, f"用户 {email} 不存在"
+        user.is_active = active
+        await session.commit()
+
+
+async def test_inactive_user_cannot_log_in(client, register, login, app):
+    await register("alice@example.com")
+    await _set_active(app, "alice@example.com", False)
+
+    r = await login("alice@example.com")
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "user_inactive"
+
+
+async def test_inactive_user_token_is_rejected_with_401(client, auth_headers, app):
+    headers = await auth_headers("alice@example.com")   # 停用**前**签发的 JWT
+    assert (await client.get("/api/v1/accounts", headers=headers)).status_code == 200
+
+    await _set_active(app, "alice@example.com", False)
+
+    r = await client.get("/api/v1/accounts", headers=headers)
+    assert r.status_code == 401, "停用后旧令牌必须立刻失效，且是 401（凭证被拒）"
+    assert r.json()["error"]["code"] == "unauthorized"
+
+
+async def test_reactivating_the_user_restores_access(client, auth_headers, app):
+    """停用是状态，不是单向操作：改回 True 之后同一个令牌又能用。
+
+    这条防的是"顺手加个缓存/黑名单"式改法——把停用做成不可逆，
+    会让人以为改库回滚是安全的，实际不是。
+    """
+    headers = await auth_headers("alice@example.com")
+    await _set_active(app, "alice@example.com", False)
+    assert (await client.get("/api/v1/accounts", headers=headers)).status_code == 401
+
+    await _set_active(app, "alice@example.com", True)
+    assert (await client.get("/api/v1/accounts", headers=headers)).status_code == 200
