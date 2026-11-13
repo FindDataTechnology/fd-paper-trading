@@ -43,6 +43,31 @@ class _FakeWS:
         await self._q.put(raw)
 
 
+async def _wait_until(predicate, *, timeout: float = 3.0, interval: float = 0.01) -> bool:
+    """有上限地等一个条件成立，成立即返回（不必睡满）。
+
+    为什么不用固定 `sleep(0.05)`：2026-11-13 全量跑时这条用例偶发红在
+    `assert any(... quote ...)` 上——`ws_endpoint` 是一个 task，它要先取走 auth、
+    再取走 subscribe 才会把连接登记进 manager。负载高时 50ms 内这两步可能没排到，
+    于是订阅尚未生效，后面所有依赖该连接的事件（quote、order）都不会到。
+    固定睡眠既慢（快机器白等）又脆（慢机器不够）——换成轮询两头都对。
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(interval)
+    return predicate()
+
+
+def _subscribed(app, symbol: str) -> bool:
+    """manager 里是否有任一连接订阅了该 symbol（即 subscribe 已被处理）。"""
+    return any(
+        symbol in c.subscribed for c in getattr(app.state.realtime, "_connections", ())
+    )
+
+
 async def test_full_trading_flow(client, register, login, auth_headers, create_account, place_order, app):
     # 1. Register + login.
     headers = await auth_headers("e2e@example.com")
@@ -69,11 +94,13 @@ async def test_full_trading_flow(client, register, login, auth_headers, create_a
     task = asyncio.create_task(ws_endpoint(ws))
     await ws.feed(json.dumps({"type": "auth", "token": token}))
     await ws.feed(json.dumps({"type": "subscribe", "symbol": "AAPL"}))
-    await asyncio.sleep(0.05)
+    # 等**订阅真的登记进 manager**，不是等一个固定时长（见 _wait_until 的说明）。
+    assert await _wait_until(lambda: _subscribed(app, "AAPL")), "订阅未在时限内登记"
     # Simulated provider emits ticks for subscribed symbols.
     await app.state.realtime._emit_ticks()
-    await asyncio.sleep(0.05)
-    assert any(e["type"] == "quote" and e["symbol"] == "AAPL" for e in ws.sent)
+    assert await _wait_until(
+        lambda: any(e["type"] == "quote" and e["symbol"] == "AAPL" for e in ws.sent)
+    ), f"未收到 AAPL 报价 tick；已收到 {[e['type'] for e in ws.sent]}"
 
     # 6. Place a market BUY order; the fill is broadcast over /ws.
     r = await place_order(headers, aid, symbol="AAPL", side="BUY", quantity="10")
@@ -82,6 +109,9 @@ async def test_full_trading_flow(client, register, login, auth_headers, create_a
     assert placed["status"] == "FILLED"
 
     # 7. The order/fill event arrived over the WebSocket.
+    assert await _wait_until(lambda: any(e["type"] == "order" for e in ws.sent)), (
+        f"未收到订单事件；已收到 {[e['type'] for e in ws.sent]}"
+    )
     order_events = [e for e in ws.sent if e["type"] == "order"]
     assert len(order_events) == 1
     assert order_events[0]["order"]["id"] == placed["id"]

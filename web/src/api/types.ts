@@ -6,6 +6,8 @@ export interface UserOut {
   id: string;
   email: string;
   created_at: string;
+  /** 管理员标记（FD_ADMIN_EMAILS 引导或改库）。组管理端点只对管理员开放。 */
+  is_admin: boolean;
 }
 
 export interface TokenResponse {
@@ -48,18 +50,25 @@ export interface OrderOut {
   id: string;
   account_id: string;
   client_order_id: string | null;
+  /** 策略归属（spec order-execution「Strategy order attribution」）。
+   *  手动单为 null；`?strategy_run_id=` 就是这个字段做过滤键。 */
+  strategy_run_id: string | null;
   instrument_id: string;
   symbol: string;
   side: string;
   order_type: string;
   quantity: string;
   limit_price: string | null;
+  /** 止损价：STOP / STOP_LIMIT 单才有值（下单时 UI 已收集，之前响应类型里漏了）。 */
+  stop_price: string | null;
   status: string;
   filled_quantity: string;
   avg_fill_price: string | null;
   reject_reason: string | null;
   created_at: string;
   updated_at: string;
+  /** 止损被触发的时刻；未触发为 null。 */
+  triggered_at: string | null;
   fills: FillOut[];
 }
 
@@ -309,6 +318,13 @@ export interface StrategyRunOut {
   params: Record<string, unknown> | null;
   stats: Record<string, number> | null;
   error: string | null;
+  // 权重轨专用，单标的轨为 null：起跑时钉住的 universe、每次再平衡的快照
+  // （目标/实际权重与缩放标记）、以及用过期收盘价估值的 (日期, 标的) 对。
+  // 目前没有组件读它们——但响应里有，类型就该有：只映半份响应的类型，
+  // 正是这次 OrderOut 漂移的成因。
+  universe: string[] | null;
+  weight_snapshots: unknown[] | null;
+  data_gaps: unknown[] | null;
   // Backtest v2 records: null on runs that predate these capabilities, which is
   // how the panel tells "not enabled" apart from "enabled, produced nothing".
   cost_config: CostConfig | null;
