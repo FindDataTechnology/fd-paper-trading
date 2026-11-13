@@ -184,3 +184,29 @@ async def test_unknown_instrument_refuses_the_order(client, auth_headers, create
     r = await place_order(h, aid, symbol="AAPL", side="BUY", order_type="MARKET", quantity="10")
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "unknown_instrument"
+
+
+async def test_unknown_instrument_is_reachable_with_the_real_provider(
+    client, auth_headers, create_account, place_order, app
+):
+    """不 monkeypatch 也要拒：真实模拟源对"不像标的"的字符串返回 None。
+
+    上面那条把 `get_instrument` 直接压成 None——它证明的是"闸的反应对"，
+    而不是"闸在默认配置下打得开"。2026-11-13 实测这两件事并不等价：
+    `SimulatedMarketDataProvider` 原先对**任意字符串**都返回合约
+    （连 `UNKNOWN-SYMBOL-XYZ` 都返回），而模拟源正是 `MARKET_DATA_SOURCE_ID`
+    未设置时的默认选择。于是默认配置下这道闸**永远不触发**：打错一个字母照样
+    下单成功，两条拒单原因里只有 no_quote 会响，而模拟源的 quote 对任意字符串
+    也都有值。规格 market-data「Instrument resolution」要求"不认识的标的返回 None"，
+    这条就是它在默认配置下的判据。
+    """
+    provider = app.state.market_data_provider
+    assert provider.get_instrument("UNKNOWN-SYMBOL-XYZ") is None  # 前提：真 provider 认不出
+
+    h = await auth_headers("alice@example.com")
+    aid = (await create_account(h, starting_balance=Decimal("100000"))).json()["id"]
+    r = await place_order(
+        h, aid, symbol="UNKNOWN-SYMBOL-XYZ", side="BUY", order_type="MARKET", quantity="10"
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "unknown_instrument"
