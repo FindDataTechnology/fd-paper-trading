@@ -52,20 +52,26 @@ class Settings(BaseSettings):
     # 到期，且生产只剩 MARKET_DATA_SOURCE_ID。若仍设旧变量，启动期直接失败（见
     # legacy_env_guard）——弃用窗口不该永久存在，也不该悄悄继续生效。
     market_data_api_key: str = ""
-    per_user_symbol_limit: int = 20
 
     # ---- astock provider (spec: astock-market-data) ----
     # Read-only DSN over the platform store's federated view
-    # (semantic_observations_all). Selecting MARKET_DATA_PROVIDER=astock
-    # without a DSN is a startup error, never a silent fallback
-    # (service-deployment: 凭据经部署环境注入；未配置选它即明确失败).
+    # (semantic_observations_all). 由注册表声明的 ``access.dsn_env`` 指名，
+    # ``selection._dsn_for`` 以 ``getattr(settings, "astock_dsn")`` 动态读取——
+    # 所以这个字段名是凭据槽的契约，不能改名。
     astock_dsn: str = ""
-    # ASTOCK_SOURCE 已于 task 6.4 删除（钉住的源现在只来自注册表声明的 db_source）。
-    # Reference basket whose trading days ARE the market calendar (a weekday
-    # where most of these did not trade is a proven holiday; a weekday where
-    # they traded but the symbol did not is a symbol-level hole). Blue chips
-    # with dense full-history rows in the pinned source — see astock.py.
-    astock_calendar_refs: str = "600000,600036,600585,600900,601318"
+
+    # 2026-11-13 删掉两个"声明了但没人读"的字段（都是 task 6.4 的残件）：
+    #
+    # * ``per_user_symbol_limit``：全仓零执行点。用户限额早已统一到组配置
+    #   （``DEFAULT_GROUP_CONFIG`` 的 ``max_universe_size`` / ``allowed_symbols``），
+    #   而 user-groups 规格明写「per-user customization via a one-person group,
+    #   SHALL NOT maintain a parallel per-user override layer」——留着它正是那条
+    #   规格禁止的"第二层覆盖"。孤儿身份 2026-11-06 就在 astock spike 报告里记过账，
+    #   今天连文档里的那一行一起清掉。
+    # * ``astock_calendar_refs``：日历参照篮的真源是注册表声明的
+    #   ``watermark_probe.reference_basket``（``selection`` 取它，注入 provider）。
+    #   本字段无人读，却带着一份**看起来像真值**的默认篮——而 index-seed 声明的篮
+    #   是 ``000300,000905,000001,399001``，两者不同：留着它就是一个会分叉的第二真源。
 
     # ---- fd-open-data concept family ----
     # The concept the fd-open-data provider reads, as (code, entity_type,
