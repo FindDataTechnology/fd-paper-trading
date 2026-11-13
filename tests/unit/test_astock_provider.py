@@ -244,7 +244,9 @@ async def test_coverage_reports_caliber_and_clean_window():
     reader = FakeReader(bars=rows)
     p = _provider(reader)
     out = await p.get_bars_with_coverage("600036", "2026-07-08", "2026-07-09")
-    assert out["adjusted"] == "forward"
+    # 这条 provider 是直接构造的（没有 registry_source_id ⇒ 没有声明），所以
+    # 口径**取不到**：按规格报 unknown，而不是拿 provider 侧别名 "forward" 顶替。
+    assert out["adjusted"] == "unknown"
     assert out["source"] == "astock_daily"
     assert out["missing"] == [] and out["market_closed"] == []
     assert out["fill_failed"] is False
@@ -536,11 +538,41 @@ async def test_coverage_caliber_follows_the_declaration_not_the_constant():
 
 
 @pytest.mark.asyncio
-async def test_coverage_caliber_falls_back_to_the_constant_without_registry():
+async def test_coverage_caliber_is_unknown_without_a_declaration():
+    """没有声明 ⇒ 报 `unknown`，**不**退回模块常量。
+
+    规格 astock-market-data「Indeterminable caliber is stated, not defaulted」：
+    「WHEN the provider cannot establish which caliber it read THEN the coverage report
+    marks the caliber as **unknown** instead of asserting a value」。
+
+    这条测试原先断言的是反面（`== "forward"`，注释写"退回已知事实，不是编造"）——
+    但 `"forward"` 是 provider 侧别名，**不在契约词表** `PRICE_ADJUSTMENTS` 里：
+    下游会把它原样记进 `run.params["adjusted"]` 与 `price_caliber`，
+    `caliber_for("forward")` 又把它映射成 `qfq`。所以"退回"实际是**两处各自补了一个断言**。
+    2026-11-13 按规格翻转：取不到就报 unknown。
+    """
     rows = [_bar_row("2026-07-08", 37, 38, 36, 37.7)]
     p = _provider(FakeReader(bars=rows))     # 无注册表 id → 无声明
     out = await p.get_bars_with_coverage("600036", "2026-07-08", "2026-07-08")
-    assert out["adjusted"] == "forward"      # 退回已知事实，不是编造
+    assert out["adjusted"] == "unknown"
+    assert out["adjusted"] not in ("forward", "backward")   # 别名不许外泄
+
+
+@pytest.mark.asyncio
+async def test_series_ref_is_withheld_when_the_caliber_is_undeclared():
+    """有 source id 但声明拿不到 ⇒ ref **不出**，原因是 `caliber_unknown`。
+
+    这是"取不到就别替声明说话"的第二处：若仍把别名传进 `build_series_ref`，
+    `caliber_for()` 会把它映射成 `qfq`，于是 ref 里出现一个没人声明过的口径。
+    """
+    rows = [_bar_row("2026-07-08", 37, 38, 36, 37.7)]
+    p = _provider(FakeReader(bars=rows), registry_source_id="astock_daily")
+    p._decl = None            # 显式模拟"声明拿不到"
+    p._decl_loaded = True
+    out = await p.get_bars_with_coverage("600036", "2026-07-08", "2026-07-08")
+    assert out["adjusted"] == "unknown"
+    assert "series_ref" not in out
+    assert out["series_ref_unavailable"] == "caliber_unknown"
 
 
 # --------------------------------- 注册表给不出水位时用本源自证（2026-11-10 实测）

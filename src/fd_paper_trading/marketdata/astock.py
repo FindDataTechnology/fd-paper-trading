@@ -18,7 +18,8 @@ Design (openspec/changes/astock-price-channel/design.md):
   maps 6/9/5-prefixed codes to XSHG, the rest to XSHE.
 - D4: coverage carries the **declared** ``adjusted`` caliber — ``declarations.yaml``
   is the single source of truth (`8ada860`); for ``astock_daily`` it declares
-  ``qfq``, and the module constant ``_ADJUSTED`` is only the no-registry fallback.
+  ``qfq``; there is no module-level fallback — an undeclared caliber is reported
+  as ``unknown``.
   Alongside it: the standard
   missing/market_closed/fill_failed/fingerprint contract. The trading
   calendar is derived from the data itself: a date with no ``astock_daily``
@@ -72,7 +73,19 @@ _XSHG_PREFIXES = ("6", "9", "5")
 
 _SYMBOL_RE = re.compile(r"^(?P<code>\d{6})(?:\.(?P<venue>SH|SS|SZ|SHE))?$", re.I)
 
-_ADJUSTED = "forward"
+#: 声明拿不到时**报什么**。
+#:
+#: 2026-11-13 改：原先这里退回一个模块常量 ``"forward"``（provider 侧别名），于是
+#: 「取不到口径」被写成「口径是 forward」——而 "forward" 根本不是契约词
+#: （`PRICE_ADJUSTMENTS` 只有 qfq/hfq/none/not_applicable），下游把它原样记进
+#: `run.params["adjusted"]` 与 `price_caliber`，`caliber_for()` 又把它悄悄映射成
+#: `qfq`：一次"取不到"被两处各自补成了断言。
+#:
+#: 规格 astock-market-data「Indeterminable caliber is stated, not defaulted」要求的是
+#: 后者：「THEN the coverage report marks the caliber as **unknown** instead of
+#: asserting a value」。同文件空序列那条分支（`empty_gap`）本来就用的 ``"unknown"``，
+#: 现在两处一致。
+_UNKNOWN_ADJUSTMENT = "unknown"
 
 # The pinned ``source_used`` is NOT defaulted here any more: the source arrives
 # from the price-source registry (fd-open-data-mcp ``price_sources``) via
@@ -258,8 +271,8 @@ class AstockMarketDataProvider(MarketDataProvider):
     def _declaration(self):
         """本 provider 对应源的声明（缓存；拿不到返回 None）。
 
-        口径与锚点以 `declarations.yaml` 为唯一真源：本文件的 ``_ADJUSTED``
-        只是"没注册表时的已知事实"，不是可以与声明并存的第二份口径。
+        口径与锚点以 `declarations.yaml` 为唯一真源：本文件
+        **不保存**任何口径常量（2026-11-13 删掉了 ``_ADJUSTED``）：取不到就报 unknown。
         """
         if self._decl_loaded:
             return self._decl
@@ -281,11 +294,16 @@ class AstockMarketDataProvider(MarketDataProvider):
             self._decl = None
         return self._decl
 
-    def _declared_adjustment(self) -> str:
-        """本源的复权口径：有声明用声明，没有才退回已知常量。"""
+    def _declared_adjustment(self) -> str | None:
+        """声明的复权口径；**取不到就是 None**，不拿模块常量顶替。
+
+        返回 None 的两种情形（都属"无法确定"）：没有注册表 id（直接构造），
+        或注册表/声明读取失败。调用方据此报 ``unknown``（见 `_UNKNOWN_ADJUSTMENT`），
+        而不是断言一个值。
+        """
         decl = self._declaration()
         declared = getattr(decl, "adjustment", None) if decl is not None else None
-        return declared or _ADJUSTED
+        return str(declared) if declared else None
 
     def series_ref_for_bars(self, symbol: str, bars) -> dict | None:
         """行情接口的序列引用（cheap 版，change1 需求「每个价格响应都带引用」）。
@@ -302,7 +320,7 @@ class AstockMarketDataProvider(MarketDataProvider):
         from .series_ref import build_series_ref
 
         decl = self._declaration()
-        adjusted = getattr(decl, "adjustment", None) if decl is not None else _ADJUSTED
+        adjusted = getattr(decl, "adjustment", None) if decl is not None else None
         dates = sorted(datetime.fromtimestamp(b.ts, tz=timezone.utc).date() for b in bars)
         ref, _reason = build_series_ref(
             source_id=self._registry_source_id,
@@ -504,10 +522,10 @@ class AstockMarketDataProvider(MarketDataProvider):
             "market_closed": market_closed,
             "fill_failed": fill_failed,
             "fingerprint": _fingerprint(close_series),
-            # 口径以声明为真源：`_ADJUSTED` 只是"没有注册表时已知的事实"。
+            # 口径以声明为真源；取不到就报 `unknown`（**不**退回 provider 侧别名）。
             # 两者若各说各话，run.params["adjusted"] 与 price_series_ref.adjustment
             # 会互相矛盾，而下游没法判断该信哪个。
-            "adjusted": self._declared_adjustment(),
+            "adjusted": self._declared_adjustment() or _UNKNOWN_ADJUSTMENT,
             "source": self._source,
         }
         out.update(self._series_ref_facts(symbol, close_series, start_s, end_s))
@@ -526,7 +544,9 @@ class AstockMarketDataProvider(MarketDataProvider):
         from .series_ref import build_series_ref
 
         decl = self._declaration()
-        adjusted = getattr(decl, "adjustment", None) if decl is not None else _ADJUSTED
+        # 未声明 ⇒ 传 None：`build_series_ref` 会以 `caliber_unknown` 拒绝出 ref。
+        # 传 "forward" 则会被 `caliber_for()` 映射成 `qfq`——那等于替声明说话。
+        adjusted = getattr(decl, "adjustment", None) if decl is not None else None
         ref, reason = build_series_ref(
             source_id=self._registry_source_id,
             symbol=symbol,

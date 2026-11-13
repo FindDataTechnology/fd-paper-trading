@@ -75,11 +75,13 @@ async def main() -> int:
     # （旧的模块常量），于是 2026-11-13 修好取源后第一次真跑就假红。
     # 检查器自己抄一份真值，就是下一个"两套口径"。
     declared = p._declared_adjustment()
-    check("coverage caliber matches the declaration",
-          cov.get("adjusted") == declared,
+    # 声明取不到时 coverage 会报 "unknown"（规格：Indeterminable caliber is stated,
+    # not defaulted）。所以这里比的是「声明，或显式的 unknown」——两边都不许是别名。
+    check("coverage caliber matches the declaration (or is explicitly unknown)",
+          cov.get("adjusted") == (declared or "unknown"),
           f"adjusted={cov.get('adjusted')}, declared={declared}")
-    check("coverage caliber is a contract word",
-          cov.get("adjusted") in PRICE_ADJUSTMENTS,
+    check("coverage caliber is a contract word or explicitly unknown",
+          cov.get("adjusted") in PRICE_ADJUSTMENTS or cov.get("adjusted") == "unknown",
           f"adjusted={cov.get('adjusted')}")
     check("coverage has fingerprint", bool(cov.get("fingerprint")))
     print(f"   coverage: {len(cov['bars'])} bars, missing={len(cov['missing'])}, "
