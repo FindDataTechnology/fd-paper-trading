@@ -62,29 +62,38 @@ uv run fd-paper-trading
 
 > **Admin bootstrap:** to manage user groups (custom-code access, symbol allowlists, limits), set `FD_ADMIN_EMAILS=you@example.com` in `.env` and register with that email - the account is promoted to admin. Admins manage groups at `POST /api/v1/groups` and assign users at `POST /api/v1/users/{id}/group`.
 
-### fd-open-data market data (optional)
+### Real market data
 
-To trade/backtest on real daily bars from the [fd-open-data-mcp](https://github.com/FindDataTechnology/fd-open-data-mcp) ontology instead of simulated quotes:
-
-```bash
-# One-time bootstrap of the ontology DB (migrate, catalog import, concepts,
-# bindings, entity seeds). Set FD_OPEN_DATA_MCP_DATABASE_URL to override the
-# default sqlite location.
-uv run python scripts/setup_fd_open_data.py
-
-# Then select the provider
-MARKET_DATA_PROVIDER=fd-open-data uv run fd-paper-trading
-```
-
-The bootstrap prints a coverage report mapping the curated symbol universe to ontology entity IDs; unresolved symbols return no bars/quotes until the ontology seeds them (e.g. via the library's `migrate-astock-daily` or entity import commands).
-
-**Concept family** — the provider reads one concept, configured as code/entity-type/frequency (default `nav.unit`/`fund`/`daily` — fund NAV, the family with real production data, updated daily). `CRYPTO_*` and `IDX_*` concepts are live in the catalog but currently carry no observations:
+Selection is **one variable**: `MARKET_DATA_SOURCE_ID` — a source id registered in
+fd-open-data-mcp's price-source registry (`price_sources/declarations.yaml`). The
+registry declares how each source is reached (`access.kind`), and that protocol picks
+the provider class; swapping a source is a declarations edit, not a code edit.
 
 ```bash
-FD_OPEN_DATA_CONCEPT=CRYPTO_PRICE FD_OPEN_DATA_ENTITY_TYPE=symbol MARKET_DATA_PROVIDER=fd-open-data uv run fd-paper-trading
+# Registered today (all three read the platform federated view over ASTOCK_DSN):
+#   astock_daily  前复权 A 股日线
+#   akshare       平台侧 akshare 落库的同族数据
+#   index-seed    指数种子
+export ASTOCK_DSN='…'            # read-only DSN (same value as FD_OPEN_DATA_DSN)
+MARKET_DATA_SOURCE_ID=astock_daily uv run fd-paper-trading
 ```
 
-A deprecated concept degrades to a data gap (no bars, no quotes), never an error. The stock `price.*` family is deprecated by curation policy and must not be re-registered.
+Leave `MARKET_DATA_SOURCE_ID` empty for the simulated provider (deterministic synthetic
+quotes — no key, good for dev/tests). An id the registry does not carry fails startup
+with that id named; there is no silent fallback to another provider.
+
+> The old `MARKET_DATA_PROVIDER` / `ASTOCK_SOURCE` / `ASTOCK_CALENDAR_REFS` selectors
+> were **removed** (their compatibility mapping expired). A process that still has any of
+> them set fails startup naming it — remove them from `.env` before upgrading.
+
+> The ontology-backed `fd-open-data` provider still exists (`marketdata/fd_open_data.py`)
+> but **cannot currently be selected through configuration**: no registered source
+> declares `access.kind: fd_open_data_ontology`. It is reachable only by constructing it
+> directly (tests/scripts). Its one-time ontology bootstrap —
+> `uv run python scripts/setup_fd_open_data.py` — and its concept family
+> (`FD_OPEN_DATA_CONCEPT` / `FD_OPEN_DATA_ENTITY_TYPE` / `FD_OPEN_DATA_FREQUENCY`,
+> default `nav.unit` / `fund` / `daily`) apply to that provider whenever a source is
+> registered for it. A deprecated concept degrades to a data gap, never an error.
 
 ### Development
 

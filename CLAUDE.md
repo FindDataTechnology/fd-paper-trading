@@ -149,7 +149,7 @@ Specs are `{"kind":"template",...}` | `{"kind":"code",...}` (`strategy/spec.py`,
 
 **Admin bootstrap:** set `FD_ADMIN_EMAILS=a@x.io,b@x.io`; registering with a listed email promotes the user to admin. Leave empty to bootstrap none.
 
-**Market data for strategies:** set `MARKET_DATA_PROVIDER=fd-open-data` and bootstrap the ontology once with `uv run python scripts/setup_fd_open_data.py` (needs the sibling `fd-open-data-mcp` checkout; set `FD_OPEN_DATA_MCP_DATABASE_URL` if not using its default). The provider lives at `marketdata/fd_open_data.py`.
+**Market data for strategies:** selection is `MARKET_DATA_SOURCE_ID` — a source id from fd-open-data-mcp's price-source registry; the declared `access.kind` picks the provider class (see `marketdata/selection.py`). Registered today: `astock_daily`, `akshare`, `index-seed` (all federated_view; credential slot `ASTOCK_DSN`). Unset ⇒ simulated; an unregistered id ⇒ startup error naming it; the legacy `MARKET_DATA_PROVIDER` / `ASTOCK_SOURCE` / `ASTOCK_CALENDAR_REFS` are removed and now **fail startup**. The ontology-backed provider (`marketdata/fd_open_data.py`) still exists but no registered source declares `access.kind: fd_open_data_ontology`, so configuration cannot select it today — only direct construction can.
 
 **Custom-code sandbox import note:** `marketdata/__init__.py`, `marketdata/provider.py`, `polygon.py`, `simulated.py`, and `strategy/__init__.py` import nautilus/httpx/sqlalchemy **lazily** (TYPE_CHECKING or deferred). The sandbox worker only needs `Bar`/`StrategyContext`/codegen, so per-bar subprocess spawn stays ~tens of ms. Do not re-add eager nautilus/httpx imports to these modules.
 

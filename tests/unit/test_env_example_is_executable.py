@@ -35,6 +35,12 @@ REPO = Path(__file__).resolve().parents[2]
 EXAMPLE = REPO / ".env.example"
 CONFIG = REPO / "src" / "fd_paper_trading" / "config.py"
 
+#: 会被读者逐行照抄的文档。`.env.example` 是配置模板，README/CLAUDE 里的命令块是
+#: 运行指令——三者都是"可执行文档"，同一个判据都适用（2026-11-13：README 那两行
+#: `MARKET_DATA_PROVIDER=fd-open-data uv run fd-paper-trading` 与 CLAUDE.md 那条
+#: "set MARKET_DATA_PROVIDER=…" 和 .env.example 是同一个错，一起修）。
+EXECUTABLE_DOCS = (EXAMPLE, REPO / "README.md", REPO / "CLAUDE.md")
+
 #: 旧选择器：出现即启动失败（selection.LEGACY_ENV_VARS）。
 LEGACY_SELECTORS = ("MARKET_DATA_PROVIDER", "ASTOCK_SOURCE", "ASTOCK_CALENDAR_REFS")
 
@@ -64,28 +70,30 @@ def _example_lines() -> list[tuple[int, str]]:
     return list(enumerate(EXAMPLE.read_text().splitlines(), 1))
 
 
-def test_no_legacy_selector_appears_as_an_assignment():
-    """旧选择器不许以**赋值行**的形式出现在文档里（注释掉的也算）。
+def test_no_legacy_selector_appears_as_an_inline_assignment():
+    """旧选择器不许以**行内赋值**出现在可执行文档里（注释掉的也算）。
 
-    判据刻意收窄到"赋值行"（`NAME=…` 或 `# NAME=…`），不是"名字不许出现"：
-    文档必须能说"这几个名字已删除、别再设"，那需要写出名字；真正有害的是
-    **可抄的赋值行**——读者把 `#` 去掉、或直接照抄，就得到一个启动即失败的配置。
+    判据刻意收窄到"赋值"（`NAME=…`、`# NAME=…`、或命令里的 `NAME=value cmd`），
+    不是"名字不许出现"：文档必须能说"这几个名字已删除、别再设"，那需要写出名字；
+    真正有害的是**可抄的赋值**——读者照抄就得到一个启动即失败的配置。
     第一版写成"名字出现即命中"，当场把我自己那句"旧选择器 X / Y / Z 已删除"也判红：
     那是把判据的松紧搞错了，不是把文档写错。
     """
-    patterns = [
-        (name, re.compile(rf"^\s*(?:#\s*)?{name}\s*="))
+    # 行首赋值（`NAME=` / `# NAME=`）或行内赋值（`NAME=value` 出现在句子/命令中间）
+    assignments = [
+        (name, re.compile(rf"(?:^|\s|`)#?\s*{name}\s*="))
         for name in LEGACY_SELECTORS
     ]
     hits = [
-        f".env.example:{lineno} {name}"
-        for lineno, line in _example_lines()
-        for name, pat in patterns
-        if pat.match(line)
+        f"{path.relative_to(REPO)}:{lineno} {name}"
+        for path in EXECUTABLE_DOCS
+        for lineno, line in enumerate(path.read_text().splitlines(), 1)
+        for name, pat in assignments
+        if pat.search(line)
     ]
     assert not hits, (
-        f"{hits} —— 这些是已删除的旧选择器，写成赋值行就是给人抄的。"
-        "选择器只有 MARKET_DATA_SOURCE_ID；把赋值行删掉（说明文字可以保留）。"
+        f"{hits} —— 这些是已删除的旧选择器，写成赋值就是给人抄的。"
+        "选择器只有 MARKET_DATA_SOURCE_ID；把赋值删掉（说明文字可以保留）。"
     )
 
 
