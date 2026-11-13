@@ -1,0 +1,53 @@
+concepts: net_income=240 equity=244 close=234 granularity='year'（按 code 解析）
+财务关系: semantic_observations_read（semantic_observations_read: 有财务行）
+价格关系: semantic_observations_all（生产 provider 同一条；astock_daily 在 xinru3）
+exposure @ 2023-12-31: 1533 entities with ROE
+exposure @ 2024-12-31: 1548 entities with ROE
+exposure @ 2025-12-31: 1547 entities with ROE
+PASS: >= 3 cross-sections with >= 50 entities (spec floor for IC) — usable periods=['2023-12-31', '2024-12-31', '2025-12-31']
+universe: 1548 entities across 3 periods (capped 2000/period for price reads)
+标签源: akshare@ft_sem_obs_xinru2（探针窗口 2024-05-01；astock_daily@semantic_observations_all: 0/200 只凑够 21 根（0%）；akshare@ft_sem_obs_xinru2: 200/200 只凑够 21 根（100%））
+  ⚠️ 标签源 akshare ≠ provider 钉住的 astock_daily：历史窗口里 astock_daily 每只只有个位数 bar，撑不起 20 日前瞻。两期以上截面只能用有历史的源；口径已写进报告。
+forward returns @ 2023-12-31 (decision 2024-05-01 → 2024-09-01): 1186 entities
+forward returns @ 2024-12-31 (decision 2025-05-01 → 2025-09-01): 1210 entities
+forward returns @ 2025-12-31 (decision 2026-05-01 → 2026-09-01): 1216 entities
+PASS: bulk reader matches provider.get_daily_bars on astock_daily （标签源是 akshare，故只验读器） — checked=25 mismatches=0
+
+== IC series (Spearman, factor=ROE, horizon=20 trading days) ==
+   2023-12-31: IC=+0.2346 (n=1186)
+   2024-12-31: IC=-0.1648 (n=1210)
+   2025-12-31: IC=+0.0987 (n=1216)
+PASS: IC series has >= 3 points
+   IC mean=+0.0562  ICIR=+0.2767
+
+== quintile layering @ 2025-12-31 (low ROE -> high ROE) ==
+   L1: -0.0917 (n=243)
+   L2: -0.0814 (n=243)
+   L3: -0.0805 (n=243)
+   L4: -0.0521 (n=243)
+   L5: -0.0482 (n=244)
+   Q5-Q1 spread: +0.0435
+PASS: layering produced 5 layers
+PASS: every layer has >= 5 names — sizes=[243, 243, 243, 243, 244], floor=5
+
+== target basket for weight_backtest_topN.py (top 30 by ROE @ 2025-12-31) ==
+   names=30: 300560,301560,603286,300539,300665,600660,301275,688652,600818,688609,600160,603227,600346,603075,301606,603009,601869,600883,688729,603937,603255,301221,301219,301348,300585,601158,605365,301020,688981,301072
+   FACTOR_WEIGHT_SCHEME=score 时要带上这些**真实分数**（不许按名次编）：
+   FACTOR_SCORES=300560:37.421486,301560:27.405405,603286:13.664353,300539:12.651663,300665:8.990475,600660:7.670704,301275:7.388316,688652:5.533961,600818:4.381050,688609:3.119513,600160:2.969736,603227:2.798300,600346:2.582940,603075:2.459045,301606:2.159365,603009:1.829529,601869:1.692131,600883:1.441067,688729:1.193812,603937:1.155118,603255:0.932405,301221:0.883173,301219:0.746100,301348:0.601743,300585:0.596658,601158:0.508897,605365:0.499948,301020:0.439676,688981:0.411639,301072:0.374504
+PASS: weight backtest inputs assembled — 30 names
+   ⇒ 引擎执行（equal / score 两轨）由 weight_backtest_topN.py 跑；本脚本不声称已执行
+
+== in/out-of-sample split (explicit dates) ==
+   in-sample dates: ['2023-12-31']
+   out-sample dates: ['2024-12-31', '2025-12-31']
+PASS: both segments non-empty
+
+== honesty notes (executable flags) ==
+{"item": "ic", "executable": true, "reason": "multi-period Spearman IC on real store (granularity=year, 3 periods)"}
+{"item": "layering", "executable": true, "reason": "5-layer quantile spread on real store"}
+{"item": "weight_backtest_inputs", "executable": true, "reason": "equal/score targets from real exposures; engine execution lives in weight_backtest_topN.py"}
+{"item": "quarterly_net_income", "executable": false, "reason": "net_income 的季度序列被平台判为错绑：2025Q3 的 4895 行里 4893 行是 akshare_misbound（值域像 EPS）。年报序列干净（每期 1533-1548 只），所以因子按年报口径算；修季度序列属于采集侧，不在本脚本"}
+{"item": "per_period_disclosure_dates", "executable": false, "reason": "period 行只有一次批量抓取戳（fetched_at），没有逐份报表的披露日；决策日按法定截止（年报 4/30）之后取，是保守口径而非精确披露日"}
+{"item": "benchmark_index", "executable": false, "reason": "000300/000905 index series absent store-wide (① spike); IC is raw-return based, no excess-return variant"}
+
+ALL PASS

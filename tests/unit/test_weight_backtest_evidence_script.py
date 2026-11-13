@@ -67,3 +67,35 @@ def test_non_numeric_score_raises(script) -> None:
 def test_empty_scores_is_an_empty_mapping(script) -> None:
     assert script.parse_scores("") == {}
     assert script.parse_scores(None) == {}
+
+
+# ---- 2026-11-13：真跑撞出的"分数是超集"形态 ----------------------------------
+#
+# 真库里 top-30 篮子 + 引擎只取有 bar 的前 10 只，把整份 FACTOR_SCORES 传给
+# `score_proportional_weights` 会抛 `weights outside universe`——分配器是对的
+# （不裁等于给不在册标的配权），错在调用点。`build_weights` 把裁剪与缺分数检查
+# 收在一处；这三条钉住的就是那个形态，免得下次又把"超集"当成"配置错"。
+
+
+def test_score_weights_are_restricted_to_the_universe(script) -> None:
+    universe = [f"6000{i:02d}" for i in range(10)]
+    scores = {c: float(i + 1) for i, c in enumerate(universe)}
+    scores["999999"] = 100.0          # 不在 universe 里的分数（top-30 篮子的常态）
+    weights = script.build_weights("score", scores, universe)
+    assert set(weights) == set(universe), "超集分数不能给不在册标的配权"
+    assert "999999" not in weights
+    assert sum(weights.values()) == pytest.approx(0.9)
+
+
+def test_score_weights_name_the_missing_names(script) -> None:
+    universe = ["600000", "600001"]
+    with pytest.raises(ValueError) as ei:
+        script.build_weights("score", {"600000": 1.0}, universe)
+    assert "600001" in str(ei.value), "缺哪个标的要能读出来"
+
+
+def test_equal_weights_ignore_scores_entirely(script) -> None:
+    universe = ["600000", "600001", "600002", "600003", "600004"]
+    weights = script.build_weights("equal", {"600009": 5.0}, universe)
+    assert set(weights) == set(universe)
+    assert set(weights.values()) == {0.18}

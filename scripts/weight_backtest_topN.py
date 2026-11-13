@@ -33,7 +33,10 @@ from fd_paper_trading.strategy.allocation import score_proportional_weights  # n
 from fd_paper_trading.strategy.spec import Rebalance, WeightSpec  # noqa: E402
 from fd_paper_trading.strategy.weight_backtester import replay_weights  # noqa: E402
 
-END = date(2026, 7, 10)  # the astock_daily anchor (data ends there)
+#: 回测末端。2026-07-10 是 astock_daily 当初的水位锚点；水位会往前走（2026-11-13 实测
+#: 已到 2026-11-12），所以允许用 `FACTOR_END_DATE` 覆盖。默认值不动——默认行为与已归档的
+#: 那份验收报告一致，改窗口必须是显式的。
+END = date.fromisoformat(os.environ.get("FACTOR_END_DATE", "2026-07-10"))
 
 #: Weight sources the acceptance run can execute. `score` needs explicit scores.
 SCHEMES = ("equal", "score")
@@ -72,6 +75,28 @@ def parse_scores(raw: str | None) -> dict[str, float]:
     return scores
 
 
+def build_weights(scheme: str, scores: dict[str, float], universe: list[str],
+                  budget: float = 0.9) -> dict[str, float]:
+    """按 scheme 造目标权重；score 模式**只把 universe 里那些分数**交给分配器。
+
+    ⚠️ 2026-11-13 真跑撞出来的坑：调用方若把整份 `FACTOR_SCORES`（例如 top-30）
+    连同只有前 10 只的 universe 一起传进去，`score_proportional_weights` 会抛
+    `weights outside universe`——**它是对的**（不裁就等于给不在册的标的配了权重），
+    错在调用点。这里把裁剪与"缺分数"的检查放在同一处，规则只有一个实现。
+
+    缺分数时抛 ValueError（不是 KeyError）：调用方要把这句话原样打给人看，
+    缺的是哪个标的、缺了几个都得能读懂。
+    """
+    if scheme == "score":
+        missing = [c for c in universe if c not in scores]
+        if missing:
+            raise ValueError(f"FACTOR_SCORES 缺 {len(missing)} 个在册标的：{missing[:5]}")
+        return score_proportional_weights({c: scores[c] for c in universe},
+                                          budget=budget, universe=universe)
+    w = round(budget / len(universe), 4)
+    return {c: w for c in universe}
+
+
 async def main() -> int:
     codes = [c for c in os.environ.get("FACTOR_TOP_CODES", "").split(",") if c]
     decision = os.environ.get("FACTOR_DECISION_DATE", "2025-09-30")
@@ -102,15 +127,15 @@ async def main() -> int:
         print(f"FAIL: only {n} names have bars >= 5")
         return 1
     if scheme == "score":
-        missing = [c for c in universe if c not in scores]
-        if missing:
-            print(f"FAIL: FACTOR_SCORES 缺 {len(missing)} 个在册标的：{missing[:5]}")
+        try:
+            weights = build_weights(scheme, scores, universe)
+        except ValueError as exc:
+            print(f"FAIL: {exc}")
             return 2
-        weights = score_proportional_weights(scores, budget=0.9, universe=universe)
         label = f"score-proportional top{n} (0.9 预算按分数占比)"
     else:
+        weights = build_weights(scheme, scores, universe)
         w = round(0.9 / n, 4)
-        weights = {c: w for c in universe}
         label = f"top{n} equal-weight {w}"
     axis = sorted({
         datetime.fromtimestamp(b.ts, tz=timezone.utc).date().isoformat()

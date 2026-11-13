@@ -1,0 +1,11 @@
+== weight-mode backtest REAL ENGINE (score-proportional top10 (0.9 预算按分数占比)) ==
+   universe: ['300560', '301560', '603286', '300539', '300665', '600660', '301275', '688652', '600818', '688609']
+   weights: {'300560': 0.2627, '301560': 0.1924, '603286': 0.0959, '300539': 0.0888, '300665': 0.0631, '600660': 0.0538, '301275': 0.0519, '688652': 0.0388, '600818': 0.0307, '688609': 0.0219}
+   window: 2026-04-24..2026-11-12 (decision 2026-05-01, rebalances every 10 bars)
+   rebalance dates: 9
+   status: COMPLETED, instructions=86 (skipped=8), filled=78, final_equity=100935.71
+   stats: {'total_return': 0.009357, 'max_drawdown': 0.142613, 'sharpe': 0.2648, 'win_rate': None, 'trade_count': 78, 'final_equity': 100935.71, 'rebalance_count': 9, 'scaled_instruction_count': 0, 'periods_without_orders': []}
+   snapshot 2026-04-29: target={'300560': 0.2627, '301560': 0.1924, '603286': 0.0959} instructions=10
+   snapshot 2026-07-23: target={'300560': 0.2627, '301560': 0.1924, '603286': 0.0959} instructions=10
+   snapshot 2026-08-06: target={'300560': 0.2627, '301560': 0.1924, '603286': 0.0959} instructions=9
+PASS: weight backtest COMPLETED with filled trades > 0 (filled=78, instructions=86)
