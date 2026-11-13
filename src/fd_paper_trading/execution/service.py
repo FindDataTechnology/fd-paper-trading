@@ -375,6 +375,23 @@ class PaperExecutionService:
                 continue  # no fresh quote: nothing to evaluate against
             if self._is_stale_quote(quote):
                 continue  # an old price must not trigger (see MAX_QUOTE_AGE_SECONDS)
+            # Record the trigger moment *only* when the stop condition actually
+            # holds. `result.status == "OPEN"` cannot carry this: the engine uses
+            # OPEN for both "condition not met, still resting" and "triggered but
+            # the limit has not crossed". Stamping on OPEN marked every resting
+            # stop as triggered, and the next evaluation — feeding that stamp back
+            # as `triggered=True` — skips the condition check and fills a STOP at
+            # its stop price (or a STOP_LIMIT by its limit rule) although the
+            # price never crossed. Measured 2026-11-13: bid 269.95, stop 268.95,
+            # an unrelated limit order on the same symbol → the stop filled at
+            # 268.95 and the position vanished.
+            if order.triggered_at is None and self.fill_engine.trigger_condition_met(
+                quote, order.side, order.stop_price
+            ):
+                order.triggered_at = datetime.now(timezone.utc)
+            # Compute the fill *after* stamping, so a stop triggered on this very
+            # evaluation is judged as triggered (STOP fills; STOP_LIMIT keeps
+            # resting as a limit until its limit crosses).
             result = self.fill_engine.compute_fill(
                 quote,
                 order.side,
@@ -384,12 +401,6 @@ class PaperExecutionService:
                 order.stop_price,
                 triggered=order.triggered_at is not None,
             )
-            if order.triggered_at is None and result.status in ("FILLED", "OPEN"):
-                # Distinguish "triggered now" from "was already a resting
-                # triggered stop-limit": for STOP, any FILLED here is a fresh
-                # trigger; for STOP_LIMIT, a fill means the trigger+limit both
-                # crossed. Either way the trigger moment is now.
-                order.triggered_at = datetime.now(timezone.utc)
             if result.fills:
                 try:
                     # The cash a stop was placed against may be gone by the time

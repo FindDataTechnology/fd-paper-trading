@@ -62,6 +62,26 @@ class TriggerOutcome:
 class SimFillEngine:
     """Computes fills for a single order against a single quote (pure Python)."""
 
+    @staticmethod
+    def trigger_condition_met(
+        quote: Quote, side: str, stop_price: Decimal | None
+    ) -> bool:
+        """Whether ``quote`` crosses ``stop_price`` — the stop's trigger rule.
+
+        Single source of truth, deliberately: ``_compute_stop_fill`` decides the
+        fill from it, and the service decides whether to *record the trigger
+        moment* from it. Those two must never disagree — the ledger's
+        ``triggered_at`` is what later evaluations feed back as ``triggered=True``,
+        so a stamp taken from anything other than this rule (2026-11-13: it was
+        taken from "status == OPEN", which also means "not triggered") lets an
+        untouched stop fill at its own stop price on the next evaluation.
+        """
+        if stop_price is None:
+            return False
+        if side == "BUY":
+            return quote.ask >= stop_price      # buy stop triggers at or above
+        return quote.bid <= stop_price          # sell stop triggers at or below
+
     def compute_fill(
         self,
         quote: Quote,
@@ -137,12 +157,7 @@ class SimFillEngine:
             return FillResult("REJECTED", [], Decimal("0"), None)
 
         # Check trigger condition
-        if side == "BUY":
-            # Buy stop triggers when ask >= stop_price
-            is_triggered = triggered or quote.ask >= stop_price
-        else:
-            # Sell stop triggers when bid <= stop_price
-            is_triggered = triggered or quote.bid <= stop_price
+        is_triggered = triggered or self.trigger_condition_met(quote, side, stop_price)
 
         if not is_triggered:
             # Stop not triggered - rests as OPEN

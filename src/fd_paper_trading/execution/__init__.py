@@ -2,5 +2,12 @@
 
 from .fill_engine import FillResult, SimFillEngine
 from .service import OrderRejected, PaperExecutionService
+from .stop_sweeper import StopSweeper
 
-__all__ = ["FillResult", "SimFillEngine", "OrderRejected", "PaperExecutionService"]
+__all__ = [
+    "FillResult",
+    "SimFillEngine",
+    "OrderRejected",
+    "PaperExecutionService",
+    "StopSweeper",
+]

@@ -10,6 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..config import get_settings
 from ..execution import PaperExecutionService
+from ..execution.stop_sweeper import StopSweeper
 from ..marketdata import MarketDataProvider, build_market_data_provider
 from ..persistence.base import Database, create_database
 from ..realtime import ConnectionManager
@@ -50,11 +51,15 @@ async def lifespan(app: FastAPI):
     # Resume live paper runs that were active when the process last exited
     # (design D8 recovery); their tasks poll for new daily bars.
     await app.state.strategy_runner.recover()
+    # A resting stop's trigger point is "a new quote arrives"; a manually traded
+    # account produces none on its own, so the sweeper supplies that tick.
+    await app.state.stop_sweeper.start()
     try:
         yield
     finally:
         # Cancel runner tasks without touching run status so the next boot's
         # recover() resumes them.
+        await app.state.stop_sweeper.stop()
         await app.state.strategy_runner.shutdown()
         await app.state.realtime.stop()
 
@@ -122,6 +127,9 @@ def create_app(
     )
     app.state.realtime = ConnectionManager(provider=provider)
     app.state.strategy_runner = PaperRunSupervisor(app)
+    app.state.stop_sweeper = StopSweeper(
+        app, interval_seconds=settings.stop_sweep_seconds
+    )
 
     # Standardized error responses.
     app.add_exception_handler(APIError, api_error_handler)

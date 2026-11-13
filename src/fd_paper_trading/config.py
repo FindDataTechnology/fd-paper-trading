@@ -96,6 +96,16 @@ class Settings(BaseSettings):
     # Comma-separated emails promoted to admin on registration (design D7).
     fd_admin_emails: str = ""
 
+    # ---- Resting stop orders ----
+    # How often the sweeper re-evaluates resting STOP/STOP_LIMIT orders of
+    # accounts that no strategy run is driving. A stop's trigger point is "a new
+    # quote arrives" (stop-order change D1), and a manually traded account
+    # produces no such arrival on its own — without this, a stop only wakes up
+    # when its owner places another order on the same symbol. The underlying
+    # price is the daily close, so a 60 s cadence reads the same value the
+    # placement path would; it is not an intraday evaluation. 0 disables it.
+    stop_sweep_seconds: float = 60.0
+
 
 
 @lru_cache
