@@ -23,6 +23,15 @@ from ..marketdata import MarketDataProvider
 
 _QUOTE_Q = 2  # decimal places for streamed quote prices
 
+# How many quotes one tick cycle may have in flight at once. Bounded fetch is not
+# an optimisation: the tick loop runs every second and the production providers
+# read the store per symbol, so a serial loop over a legal number of symbols
+# overruns the interval (measured 2026-11-14: 1000 symbols ≈ 1167 ms per tick,
+# and the loop can then never catch up). Kept below ``db_pool_size`` (10) so the
+# stream never holds the whole pool away from the order/query paths.
+# The task count is this constant, never the symbol count.
+_TICK_FETCH_CONCURRENCY = 8
+
 
 @dataclass
 class ClientConnection:
@@ -74,6 +83,37 @@ class ConnectionManager:
         async with self._lock:
             return len(self._connections)
 
+    async def try_subscribe(
+        self, conn: ClientConnection, symbol: str, limit: int
+    ) -> bool:
+        """Subscribe ``conn`` to ``symbol`` unless it would exceed ``limit``.
+
+        The cap counts **distinct symbols across every connection owned by the
+        same user**, not per connection: one user can open as many tabs or
+        devices as they like, so a per-connection budget would multiply exactly
+        the allowance this cap exists to bound.
+
+        Returns ``True`` when the subscription is held afterwards (including the
+        idempotent re-subscribe of a symbol already held — clients restore their
+        subscriptions after reconnecting, so rejecting that would show a bogus
+        error at the cap) and ``False`` when the cap refused it. ``limit <= 0``
+        means unlimited, the same convention as ``order_rate_per_second``.
+        """
+        async with self._lock:
+            if symbol in conn.subscribed:
+                return True
+            if limit > 0:
+                held = {
+                    s
+                    for c in self._connections
+                    if c.user_id == conn.user_id
+                    for s in c.subscribed
+                }
+                if len(held) >= limit:
+                    return False
+            conn.subscribed.add(symbol)
+            return True
+
     # ---- broadcasting ----
 
     async def broadcast_to_user(self, user_id: uuid.UUID, event: dict) -> None:
@@ -107,8 +147,28 @@ class ConnectionManager:
         if not subs:
             return
 
+        # Bounded worker pool: the number of tasks is the concurrency limit, not
+        # the symbol count. One slow provider call therefore delays at most the
+        # worker that made it, while a thousand symbols cannot spawn a thousand
+        # concurrent store reads.
+        pending: asyncio.Queue[str] = asyncio.Queue()
+        for symbol in subs:
+            pending.put_nowait(symbol)
+        quotes: dict[str, object] = {}
+
+        async def _worker() -> None:
+            while True:
+                try:
+                    symbol = pending.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                quotes[symbol] = await self.provider.get_quote(symbol)
+
+        workers = min(_TICK_FETCH_CONCURRENCY, len(subs))
+        await asyncio.gather(*(_worker() for _ in range(workers)))
+
         for symbol, conns in subs.items():
-            quote = await self.provider.get_quote(symbol)
+            quote = quotes.get(symbol)
             if quote is None:
                 continue
             bid, ask = self._wobble(symbol, quote)

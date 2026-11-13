@@ -37,10 +37,10 @@
 
 - [x] 5.1 Add the chosen provider's Nautilus data client factory (Databento primary) behind a provider interface so Polygon/Alpaca can swap in (design D2) - `MarketDataProvider` interface + `SimulatedMarketDataProvider` (tests) + **`PolygonMarketDataProvider` (real prices via free-tier previous-close aggregate)** wired in; selected via `MARKET_DATA_PROVIDER` env (`simulated`/`polygon`). Databento (real-time) is a future swap-in. Free Polygon tier gives end-of-day close, not real-time intraday (NBBO/last-trade return 403)
 - [x] 5.2 Implement instrument loading into the Nautilus cache on subscribe; reject orders for instruments not in cache - instruments come from the provider (`Equity` on `SIM` venue); unknown symbols rejected with `unknown_instrument` (not via Nautilus cache subscription - see D10)
-- [ ] 5.3 Implement a server-side subscription manager: one upstream subscription per symbol, fan-out to clients; enforce per-user symbol-subscription limits — **2026-11-13 复核：一半到了**。扇出已实现（`realtime/manager.py::_emit_ticks` 按 symbol 聚合所有连接的订阅，每 tick 每 symbol 只问一次 `get_quote`，再 `gather` 扇出）；**每用户订阅上限仍无实现、无测试**。整条任务因此保持未勾（勾选只认整条）
+- [x] 5.3 Implement a server-side subscription manager: one upstream subscription per symbol, fan-out to clients; enforce per-user symbol-subscription limits — **2026-11-14 补齐，整条勾上**。扇出：`realtime/manager.py::_emit_ticks` 按 symbol 聚合所有连接的订阅，每 tick 每 symbol 只问一次 `get_quote`。上限：`max_subscriptions`（组配置，默认 50，0=不限）按**用户**跨连接计不重复符号，越界回 `subscription_limit` 错误事件且不断连接（change `2026-11-14-bound-realtime-subscriptions`，已归档；规格落点 `web-realtime`「Bounded quote subscriptions」+ `user-groups` 键表与执行点）。为什么现在才补：实测一个客户端订阅 1000 个符号会让单次 tick 发 1000 次取价、耗时 1167 ms 超过 1 s 间隔——**一个用户能拖慢所有人的流**
 - [x] 5.4 Implement the WebSocket market-data streaming endpoint — **已实现**：`api/routes/ws.py`（auth 消息 → subscribe/unsubscribe → quote 推送），`tests/test_realtime_ws.py` 5 例覆盖拒绝/订阅/退订/订单事件
 - [x] 5.5 Implement data-gap detection: reject market orders when no recent quote; rest limit orders until a valid quote - market orders rejected with `no_quote` when the provider returns no quote; the simulated provider always returns a quote, so gaps are exercised via the interface contract (limit orders also require a quote in v1 - minor deviation)
-- [ ] 5.6 Tests: shared upstream fan-out, subscription-limit enforcement, data-gap rejection, unknown-instrument rejection — **2026-11-13 复核：原注不成立**。`no_quote` / `unknown_instrument` 当时是**零覆盖**（注释写已测，事实没有）；2026-11-13 补上两条用例，并发现更严重的一层：模拟源当时对任意字符串都返回合约，`unknown_instrument` 在默认配置下根本打不开，已一并修。仍缺：每用户订阅上限的用例（功能本身还没有，见 5.3）
+- [x] 5.6 Tests: shared upstream fan-out, subscription-limit enforcement, data-gap rejection, unknown-instrument rejection — **2026-11-14 补齐**。原注当初不成立（`no_quote`/`unknown_instrument` 零覆盖，且模拟源对任意字符串都返回合约 ⇒ 该门在默认配置下打不开，2026-11-13 已修并补两例）。订阅上限用例同日补上：`tests/test_realtime_ws.py` 六条（越界拒绝并解释 / 跨连接仍按用户计数 / 重订阅幂等 / `0` 不限 / 垃圾配置不崩 / 取价有界并发），五次注入各自只红该红的那条
 
 ## 6. Order Execution (`order-execution`)
 
@@ -87,11 +87,11 @@
 
 | 项 | 当初 | 今天 |
 |---|---|---|
-| 5.3 订阅管理器 + 扇出 + 每用户上限 | deferred | 扇出已实现（`_emit_ticks` 按 symbol 聚合）；**每用户订阅上限仍缺**（整条因此未勾） |
+| 5.3 订阅管理器 + 扇出 + 每用户上限 | deferred | **已全部落地**（2026-11-14：组配置 `max_subscriptions` + `try_subscribe` 按用户跨连接计数） |
 | 5.4 WS 行情流端点 | deferred | 已实现（`api/routes/ws.py` + 5 例测试） |
 | 7.2 order/fill 事件回推 | not applicable | 已实现（`orders.py:37`、`runner.py:1626`） |
 | 8.4 WS 端点（行情 + 订单） | deferred | 已实现（= 5.4 + 7.2） |
-| 5.6 测试 | 注释称已测 | **该说法不成立**；2026-11-13 补齐两条，订阅上限用例仍缺 |
+| 5.6 测试 | 注释称已测 | **原说法不成立**；2026-11-13 补两条、2026-11-14 补订阅上限六条，已齐 |
 
 仍保持未勾（理由成立，不是遗漏）：
 4.5 durable state rebuild（v1 无状态设计下 moot）、7.1 命令队列（DEVIATION D10）、

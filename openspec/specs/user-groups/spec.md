@@ -3,10 +3,12 @@
 ## Purpose
 
 约束用户组限额模型：每组可配活跃策略数、回测天数、日订单数、自定义代码门与标的白名单五键，含默认组种子、注册挂组与组切换语义。
+
 ## Requirements
+
 ### Requirement: User groups with config
 
-The system SHALL persist user groups: `user_groups(id, name unique, config JSONB, created_at)`. Recognized config keys with defaults: `max_active_strategies` (3), `max_backtest_days` (730), `max_orders_per_day` (20), `allow_custom_code` (false), `allowed_symbols` (null = all symbols). Every user SHALL belong to exactly one group; a migration SHALL seed a `default` group with the defaults and assign all existing users to it.
+The system SHALL persist user groups: `user_groups(id, name unique, config JSONB, created_at)`. Recognized config keys with defaults: `max_active_strategies` (3), `max_backtest_days` (730), `max_orders_per_day` (20), `allow_custom_code` (false), `allowed_symbols` (null = all symbols), `max_subscriptions` (50, where `0` means unlimited). Every user SHALL belong to exactly one group; a migration SHALL seed a `default` group with the defaults and assign all existing users to it.
 
 #### Scenario: Default group seeded
 - **WHEN** the migration runs on an existing database
@@ -18,7 +20,7 @@ The system SHALL persist user groups: `user_groups(id, name unique, config JSONB
 
 ### Requirement: Limits enforced at the API layer
 
-Group limits SHALL be enforced at these points: starting a paper run (`max_active_strategies` concurrent runs per user), requesting a backtest (`max_backtest_days` window), strategy-run order placement (`max_orders_per_day` per run per day), and strategy create/update (`allow_custom_code` gate, `allowed_symbols` allowlist when non-null). Enforcement SHALL produce clear errors naming the limit.
+Group limits SHALL be enforced at these points: starting a paper run (`max_active_strategies` concurrent runs per user), requesting a backtest (`max_backtest_days` window), strategy-run order placement (`max_orders_per_day` per run per day), strategy create/update (`allow_custom_code` gate, `allowed_symbols` allowlist when non-null), and `/ws` quote subscription (`max_subscriptions` distinct symbols per user across all of that user's connections). Enforcement SHALL produce clear errors naming the limit.
 
 #### Scenario: Symbol allowlist enforced
 - **WHEN** a user whose group has `allowed_symbols: ["AAPL"]` creates a strategy on `TSLA`
@@ -27,6 +29,10 @@ Group limits SHALL be enforced at these points: starting a paper run (`max_activ
 #### Scenario: Backtest window enforced
 - **WHEN** a user whose group allows 730 backtest days requests a 5-year window
 - **THEN** the system responds `400` naming the limit
+
+#### Scenario: Subscription cap enforced over the WebSocket
+- **WHEN** a user exceeds the group's `max_subscriptions` distinct symbols
+- **THEN** the server rejects the extra subscribe with an error event whose `code` is `subscription_limit` and whose message names the limit
 
 ### Requirement: Admin flag and group management API
 

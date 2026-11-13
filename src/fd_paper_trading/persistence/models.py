@@ -110,6 +110,14 @@ DEFAULT_GROUP_CONFIG = {
     # the default daily order cap, so the cap constrains per-day churn rather than
     # making a legal rebalance impossible on its own.
     "max_universe_size": 20,
+    # Distinct symbols one user may stream over /ws, counted across *all* of that
+    # user's connections. Each subscribed symbol costs one provider read per tick
+    # (the production providers read the store), so this is a load multiplier, not
+    # a UI preference: measured 2026-11-14, one client holding 1000 symbols issued
+    # 1000 quotes per tick and overran the 1s interval, slowing every other user's
+    # stream. 50 is "more than a human clicks"; 0 disables the cap (same convention
+    # as order_rate_per_second).
+    "max_subscriptions": 50,
 }
 
 

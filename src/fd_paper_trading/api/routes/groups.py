@@ -3,8 +3,8 @@
 All endpoints require ``is_admin`` (the ``require_admin`` dependency). Groups
 carry a ``config`` JSONB whose recognized keys are documented in
 ``DEFAULT_GROUP_CONFIG`` (max_active_strategies, max_backtest_days,
-max_orders_per_day, allow_custom_code, allowed_symbols); unknown keys are
-preserved verbatim.
+max_orders_per_day, allow_custom_code, allowed_symbols, max_universe_size,
+max_subscriptions); unknown keys are preserved verbatim.
 """
 
 import uuid
