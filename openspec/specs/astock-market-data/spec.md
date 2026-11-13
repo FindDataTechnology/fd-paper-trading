@@ -60,9 +60,14 @@ recent close. Timeframes other than `1d` are unsupported and SHALL be rejected e
 `search_instruments(query)` SHALL resolve A-share entities by code (e.g. `600036`,
 `000333`) and by Chinese name; `get_instrument(symbol)` SHALL return the service's own
 instrument value (symbol, display name, venue `XSHG`/`XSHE`, price/quantity precision) for
-entities the store knows and `None` otherwise. Orders for A-share symbols SHALL be accepted
-only when `get_instrument` resolves — the existing instrument-precondition requirement
-applies unchanged.
+**syntactically valid codes of the supported A-share markets**. Instrument resolution for
+this capability is syntactic by design — the interface is synchronous while the store is
+asynchronous, and the A-share catalog is the exchange's own code space rather than a curated
+list — so a syntactically valid but unknown code also yields an instrument value. Order
+acceptance therefore SHALL NOT rely on `get_instrument` alone: the order entry SHALL refuse
+the symbol with a named rejection (`unknown_instrument` when resolution itself fails,
+`no_quote` when the symbol cannot be priced), which is the precondition that actually
+prevents an uninstrumented symbol from being traded.
 
 #### Scenario: Search by code and by name
 
@@ -71,8 +76,8 @@ applies unchanged.
 
 #### Scenario: Unknown symbol stays unknown
 
-- **WHEN** `get_instrument` is asked for a symbol the store does not carry
-- **THEN** it returns `None` and order acceptance for that symbol is refused
+- **WHEN** `get_instrument` is asked for a code the store does not carry, or an order is placed for it
+- **THEN** order acceptance for that symbol is refused with a named rejection (`no_quote` for a syntactically valid but unpriceable code, `unknown_instrument` when resolution fails), even though `get_instrument` may resolve the code syntactically
 
 ### Requirement: Provider declares its adjustment caliber in coverage
 

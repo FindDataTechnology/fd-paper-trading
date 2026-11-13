@@ -142,3 +142,45 @@ async def test_limit_requires_limit_price(client, auth_headers, create_account):
     )
     assert r.status_code == 422
     assert r.json()["error"]["code"] == "validation_error"
+
+
+# ---- 2026-11-13：两条拒单原因此前零测试覆盖 -------------------------------
+#
+# `execution/service.py` 的下单入口有两道闸：
+#     instrument = provider.get_instrument(symbol)   → None ⇒ OrderRejected("unknown_instrument")
+#     quote      = await provider.get_quote(symbol)  → None ⇒ OrderRejected("no_quote")
+#
+# 这两道闸是"未知标的不能下单"的**唯一**承重墙：A 股 provider 的 `get_instrument` 只做
+# 句法解析（接口是同步的、库是异步的，见 astock.py:700 的 docstring），所以任何形如
+# A 股代码的字符串都会拿到一个合成 Instrument，真正拦住它的是 no_quote。
+#
+# 换句话说：**删掉 no_quote 那道检查，未知标的就变成可下单了**，而此前没有任何测试
+# 会红。这两条钉的就是这个。
+
+
+async def test_missing_quote_refuses_the_order(client, auth_headers, create_account, place_order, app, monkeypatch):
+    """quote 为 None ⇒ 400 `no_quote`（不是成交、也不是 500）。"""
+    provider = app.state.market_data_provider
+
+    async def _no_quote(symbol):
+        return None
+
+    monkeypatch.setattr(provider, "get_quote", _no_quote)
+
+    h = await auth_headers("alice@example.com")
+    aid = (await create_account(h, starting_balance=Decimal("100000"))).json()["id"]
+    r = await place_order(h, aid, symbol="AAPL", side="BUY", order_type="MARKET", quantity="10")
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "no_quote"
+
+
+async def test_unknown_instrument_refuses_the_order(client, auth_headers, create_account, place_order, app, monkeypatch):
+    """instrument 为 None ⇒ 400 `unknown_instrument`（先于 quote 检查）。"""
+    provider = app.state.market_data_provider
+    monkeypatch.setattr(provider, "get_instrument", lambda symbol: None)
+
+    h = await auth_headers("alice@example.com")
+    aid = (await create_account(h, starting_balance=Decimal("100000"))).json()["id"]
+    r = await place_order(h, aid, symbol="AAPL", side="BUY", order_type="MARKET", quantity="10")
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "unknown_instrument"
