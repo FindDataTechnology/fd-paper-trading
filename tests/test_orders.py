@@ -210,3 +210,81 @@ async def test_unknown_instrument_is_reachable_with_the_real_provider(
     )
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "unknown_instrument"
+
+
+# ---- 2026-11-13：`balance_after` 是规格明写的一列，全仓测试零命中 ------------
+#
+# order-execution「Fill ledgering」：每次成交都要记一条 `trade` 类型的
+# BalanceTransaction，并且**带上成交后的余额**（"with the resulting
+# `balance_after`"）。paper-accounts 也提到这一列。
+#
+# 但 `grep balance_after tests/` 零命中——只有实现里写了它。这正是最容易静默错位的
+# 那种列：`account.cash_balance += cash_delta` 与 `balance_after=account.cash_balance`
+# 的**先后顺序**决定它是成交后余额还是成交前余额；写反了，账户流水逐笔都对不上，
+# 而没有一条测试会红（余额本身、持仓、成交价全都还是对的）。
+#
+# 判据：流水不只看"有一条 trade"，还要看它记的余额等于成交后的真实余额，
+# 且 上一笔余额 + 本笔金额 == 本笔记录的余额（可对账的链）。
+
+
+async def _balance_transactions(app, account_id):
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from fd_paper_trading.persistence.models import BalanceTransaction
+
+    if not isinstance(account_id, _uuid.UUID):
+        account_id = _uuid.UUID(str(account_id))
+    async with app.state.db.session_factory() as session:
+        rows = (await session.execute(
+            select(BalanceTransaction)
+            .where(BalanceTransaction.account_id == account_id)
+            .order_by(BalanceTransaction.created_at, BalanceTransaction.id)
+        )).scalars().all()
+        return [(t.type, t.amount, t.balance_after, t.reference) for t in rows]
+
+
+async def test_fill_records_a_trade_ledgered_at_the_resulting_balance(
+    client, auth_headers, create_account, place_order, app
+):
+    h = await auth_headers("alice@example.com")
+    acct = (await create_account(h, starting_balance=Decimal("100000"))).json()
+    aid = acct["id"]
+
+    order = (await place_order(
+        h, aid, symbol="AAPL", side="BUY", order_type="MARKET", quantity="10"
+    )).json()
+    avg = _dec(order["avg_fill_price"])
+    cash = _dec((await client.get(f"/api/v1/accounts/{aid}", headers=h)).json()["cash_balance"])
+
+    txns = await _balance_transactions(app, aid)
+    trades = [t for t in txns if t[0] == "trade"]
+    assert len(trades) == 1, f"一次成交一条 trade 流水，实际 {len(trades)}：{txns}"
+
+    kind, amount, balance_after, reference = trades[0]
+    assert amount == -(Decimal("10") * avg)          # 买入扣现金
+    assert balance_after == cash                     # ← 成交后的余额，不是成交前的
+    assert reference == order["id"]                  # 能回指到订单
+    # 可对账的链：上一笔余额 + 本笔金额 == 本笔记录的余额
+    prev = [t for t in txns if t is not trades[0]]
+    assert prev, "起始入金应当也在流水里"
+    assert prev[-1][2] + amount == balance_after
+
+
+async def test_deposit_ledgers_the_resulting_balance(
+    client, auth_headers, create_account, app
+):
+    """同一条判据在入金路径上：`balance_after` 必须是入金**后**的数。"""
+    h = await auth_headers("alice@example.com")
+    acct = (await create_account(h, starting_balance=Decimal("1000"))).json()
+    aid = acct["id"]
+
+    r = await client.post(
+        f"/api/v1/accounts/{aid}/deposit", json={"amount": "500"}, headers=h
+    )
+    assert r.status_code in (200, 201), r.text
+
+    txns = await _balance_transactions(app, aid)
+    deposits = [t for t in txns if t[0] == "deposit"]
+    assert [t[2] for t in deposits] == [Decimal("1000"), Decimal("1500")]
