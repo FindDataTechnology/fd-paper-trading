@@ -70,6 +70,28 @@ def _example_lines() -> list[tuple[int, str]]:
     return list(enumerate(EXAMPLE.read_text().splitlines(), 1))
 
 
+#: 本仓**自己会跑**的脚本/配置：它们的赋值不是给人抄的，是机器照着读的。
+#: 2026-11-14 的实历：`web/e2e/run-backend.sh` 里 `export MARKET_DATA_PROVIDER=simulated`
+#: 让后端**拒绝启动**，Playwright 的 e2e job 从 6.4 起就没跑成过一次——而这条判据
+#: 当时只扫三份文档，脚本在射程之外。判据扫的是"赋值"，注释里提到名字不算。
+_RUNTIME_GLOBS = (
+    "web/e2e/*.sh",
+    ".github/workflows/*.yml",
+    "scripts/*.sh",
+    "Dockerfile",
+    "entrypoint.sh",
+    "deploy/**/*.yaml",
+    "deploy/**/*.yml",
+)
+
+
+def _runtime_scripts() -> list[Path]:
+    files: list[Path] = []
+    for pattern in _RUNTIME_GLOBS:
+        files.extend(sorted(p for p in REPO.glob(pattern) if p.is_file()))
+    return files
+
+
 def test_no_legacy_selector_appears_as_an_inline_assignment():
     """旧选择器不许以**行内赋值**出现在可执行文档里（注释掉的也算）。
 
@@ -86,7 +108,7 @@ def test_no_legacy_selector_appears_as_an_inline_assignment():
     ]
     hits = [
         f"{path.relative_to(REPO)}:{lineno} {name}"
-        for path in EXECUTABLE_DOCS
+        for path in [*EXECUTABLE_DOCS, *_runtime_scripts()]
         for lineno, line in enumerate(path.read_text().splitlines(), 1)
         for name, pat in assignments
         if pat.search(line)

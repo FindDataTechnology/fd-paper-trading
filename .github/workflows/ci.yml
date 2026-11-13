@@ -8,8 +8,26 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    env:
+      # The workspace checkout lands in a subdirectory named after the repo, so
+      # the fixture's default (`<repo>.parent / "fd-quant"`) does not reach it.
+      # FD_QUANT_ROOT is what scripts/check_contract_drift.py reads; setting it
+      # turns the drift gate's "no sibling checkout → WARN" into a real byte
+      # comparison, so the vendored copy cannot silently drift from upstream.
+      FD_QUANT_REPO: ${{ github.workspace }}/fd-quant
+      FD_QUANT_ROOT: ${{ github.workspace }}/fd-quant
     steps:
       - uses: actions/checkout@v4
+      # The backtest path imports the real fd-quant compute plane, and
+      # tests/conftest.py refuses to skip when it is missing (a silent skip would
+      # turn the cross-repo caliber acceptance into an empty run). Without this
+      # checkout every test in this job errored for the same reason — the suite
+      # was 100% red from 2026-11-13 on, which is indistinguishable from a dead
+      # gate. fd-quant is public, so the default token is enough.
+      - uses: actions/checkout@v4
+        with:
+          repository: FindDataTechnology/fd-quant
+          path: fd-quant
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
@@ -18,9 +36,14 @@ jobs:
         run: uv python install 3.12
       - name: Sync dependencies
         run: uv sync
-      # CI has no fd-quant checkout beside this repo, so this verifies the pinned
-      # copy's integrity; upstream byte drift is checked wherever a checkout
-      # exists (the gate warns rather than failing when it has nothing to compare).
+      # The fixture refuses to skip when the compute plane is missing, so CI must
+      # supply a runnable one: fd-quant's server entry point needs its optional
+      # `server` extra (fastmcp), and the fixture prefers `<checkout>/.venv/bin/python`.
+      - name: Prepare the fd-quant compute plane
+        run: |
+          cd fd-quant
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[server]"
       - name: Verify the vendored contract pin
         run: uv run python scripts/check_contract_drift.py --check
       - name: Prove the drift gate can fail
@@ -49,8 +72,14 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    env:
+      FD_QUANT_REPO: ${{ github.workspace }}/fd-quant
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: FindDataTechnology/fd-quant
+          path: fd-quant
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
@@ -66,6 +95,11 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install frontend dependencies
         run: (cd web && npm ci)
+      - name: Prepare the fd-quant compute plane
+        run: |
+          cd fd-quant
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[server]"
       - name: Build the SPA
         run: (cd web && npm run build)
       - name: Cache Playwright browsers

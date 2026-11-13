@@ -58,7 +58,7 @@
 - [x] 7.2 Implement the response channel: order/fill events delivered back to the API and WebSocket clients — **已实现**：`api/routes/orders.py:37` 与 `strategy/runner.py:1626` 调 `broadcast_to_user`；`test_ws_order_event_delivered_only_to_owning_user` 钉住「只投给属主」
 - [x] 7.3 Implement the `202 Accepted` placement flow returning an order identifier - `POST /api/v1/orders` returns 202 + order id (fills synchronously for market/crossing-limit)
 - [x] 7.4 Implement reads (orders, positions) from the Nautilus cache, reconciled with Postgres - **DEVIATION (D10)**: reads come directly from Postgres (the source of truth); no separate Nautilus cache in v1
-- [ ] 7.5 Tests: end-to-end place-order -> fill -> WebSocket notification; command-timeout handling - partial: place-order -> fill end-to-end tested in `test_orders.py`; WebSocket notification + command-timeout deferred with 8.4/7.1
+- [x] 7.5 Tests: end-to-end place-order -> fill -> WebSocket notification; command-timeout handling - **2026-11-14 复核：前两半已到，第三半不适用**。place-order -> fill 由 `test_orders.py` 覆盖；WebSocket notification 由 `test_ws_order_event_delivered_only_to_owning_user`（只投属主）+ `/ws` 行情用例覆盖，不再是 deferred。command-timeout 在本模型下 moot（无命令队列，见 7.1 的 DEVIATION D10）——原注把两者绑在一起写 deferred，7.2/8.4 落地后没回来改，属「deferred 被兑现后没人回访」的同一形态
 
 ## 8. Trading API (`trading-api`)
 
@@ -68,7 +68,7 @@
 - [x] 8.4 Implement the WebSocket endpoint streaming market data plus order/fill updates for the caller's accounts — **已实现**（= 5.4 + 7.2）
 - [x] 8.5 Implement standardized JSON error responses (error code, message, offending fields)
 - [x] 8.6 Enforce authentication on all endpoints; return `404` for cross-account/cross-user access
-- [x] 8.7 Tests: place/cancel/query orders, account management, positions, auth rejection, error format, `202` + async fill delivery - order place/cancel/query, accounts, positions, auth rejection, error format, `202` all tested in `test_auth.py` / `test_accounts.py` / `test_orders.py`; async-fill-via-WebSocket deferred with 8.4
+- [x] 8.7 Tests: place/cancel/query orders, account management, positions, auth rejection, error format, `202` + async fill delivery - order place/cancel/query, accounts, positions, auth rejection, error format, `202` all tested in `test_auth.py` / `test_accounts.py` / `test_orders.py`; **async-fill-via-WebSocket 已于 2026-11-14 核实到位**（8.4 与 7.2 均已实现，`test_ws_order_event_delivered_only_to_owning_user` 钉住只投属主）——原注的 deferred 早该划掉
 
 ## 9. Integration & Startup
 
@@ -92,6 +92,7 @@
 | 7.2 order/fill 事件回推 | not applicable | 已实现（`orders.py:37`、`runner.py:1626`） |
 | 8.4 WS 端点（行情 + 订单） | deferred | 已实现（= 5.4 + 7.2） |
 | 5.6 测试 | 注释称已测 | **原说法不成立**；2026-11-13 补两条、2026-11-14 补订阅上限六条，已齐 |
+| 7.5 / 8.7 测试 | deferred 于 7.1/8.4 | 7.2、8.4 落地后已达成；command-timeout 在本模型下 moot（2026-11-14 复核） |
 
 仍保持未勾（理由成立，不是遗漏）：
 4.5 durable state rebuild（v1 无状态设计下 moot）、7.1 命令队列（DEVIATION D10）、
