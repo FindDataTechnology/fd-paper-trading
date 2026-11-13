@@ -1,3 +1,13 @@
+# 归档补注（2026-11-13，只说明不勾）
+
+下面四项未勾的测试任务，指向的组件已于 2026-10-14 的 commit `d3dec0b` 被**有意删除**
+（"Removes the bundled CopilotKit runtime and SPA chat: the platform pack's persona
+replaces it; the SPA keeps dashboard/orders/charts/strategies."）。
+
+这些测试永远不会被写、也永远不会红：勾上等于伪造完成，删掉等于篡改历史。
+保留 `[ ]` 并附这句说明 —— 未勾在这里代表「随组件一起作废」，不是「做了一半」。
+该 capability 的 Purpose 已于同日 `8e092f1` 改记为「保留为历史约束记录」。
+
 ## 1. Backend: Chat Endpoint
 
 - [x] 1.1 Create `/api/v1/chat` endpoint in FastAPI that accepts POST requests with user messages

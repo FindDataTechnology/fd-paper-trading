@@ -19,7 +19,7 @@
 
 - [x] 3.1 spike：两候选实证 —— **候选 B（分片库指数源）死路**：指数实体（9676/10263）已注册但全库零观测（概念 288/289 亦零）；**候选 A 卡政策**（2026-10-07 服务端不重开价格抓取）。证据 `reports/astock-spike-index-data.md`
 - [x] 3.2 （原"落地指数日线供数"→spike 定论）provider 侧就绪：`_resolve_entity` stock→index fall back 已实现并有单测（`test_index_symbol_without_rows_is_gap`），指数种子一旦落地即自动可用、不改接口；**种子本身 = 数据线决策，交接挂账**（不在本 change 只读授权内，本仓不写平台库）
-- [ ] 3.3 基准端到端：**结构性挂账**（如实不伪造）——指数零观测 + 抓取政策冻结，8.3 保持挂账；种子落地后本项在 ③ 或数据线 change 补收口。触发条件记 `reports/astock-spike-index-data.md` 结论段
+- [ ] 3.3 基准端到端（**仍开放，属结构性挂账**，非遗漏）：**结构性挂账**（如实不伪造）——指数零观测 + 抓取政策冻结，8.3 保持挂账；种子落地后本项在 ③ 或数据线 change 补收口。触发条件记 `reports/astock-spike-index-data.md` 结论段
 - [x] 3.4 基准缺失报缺：provider 对无数据指数返回整窗 missing（冒烟第 8 项 rows=0 实证）；gate 拒绝点名缺失区间（spec 既有纪律 + 单测）
 
 ## 4. 部署与上线
@@ -27,9 +27,26 @@
 - [ ] 4.1 fd-infra-deploy 生产清单 env 注入（secret 引用，只读权限），镜像与仓库内容经查不含连接串 —— **待用户确认生产滚动**（provider 默认不变，仅加 env）
 - [ ] 4.2 生产真库冒烟（生产 pod 内全链）—— 依赖 4.1；**注**：开发机真库只读冒烟已全部通过（=生产同一库同一读路）
 - [ ] 4.3 生产默认 provider 切换决策 —— 荐：保留 fd-open-data 默认（基金 NAV 面在产），astock 显式选择；live 面受停更边界制约（见 spike 报告），切换与否属上线拍板
-- [ ] 4.4 文档：README provider 家族段 + `.env.example` 增补 —— 本轮执行
+- [x] 4.4 文档：README provider 家族段 + `.env.example` 增补 ——**2026-11-13 完成**（`8d39201` README「Real market data」重写为注册表口径；`d75ec1a` `.env.example` 删掉启动即失败的旧变量与两个死配置；判据 `tests/unit/test_env_example_is_executable.py` 覆盖这三份文档）
 
 ## 5. 收尾
 
-- [ ] 5.1 全量测试套件通过（含断网单测同结果纪律）—— 本轮执行
-- [ ] 5.2 `openspec validate astock-price-channel --strict` 通过后归档 —— 3.3/4.x 未勾项按 spec 原文为"when available"条件语义与上线动作，不构成 validate 阻塞；归档时点由用户按 4.3 决策定
+- [x] 5.1 全量测试套件通过（含断网单测同结果纪律）—— **2026-11-13 复核**：`pytest tests` 712 passed（含 `tests/e2e`，在 CI backend job 覆盖内）
+- [x] 5.2 `openspec validate astock-price-channel --strict` 通过后归档 —— **已归档**（本 change 在本目录下）。注：4.3「生产默认 provider 切换决策」仍是开放项，但归档这一事实不依赖它——归档的是规格修订，不是上线动作。
+
+---
+
+## 2026-11-13 复核说明（不改原判据，只标状态）
+
+| 项 | 状态 | 依据 |
+|---|---|---|
+| 3.3 基准端到端 | **开放**（结构性挂账） | 指数零观测 + 抓取政策冻结（用户 2026-09-18 停爬令）；种子落地后由数据线 change 收口 |
+| 4.1 生产清单 env 注入 | **开放** | 需用户拍板生产滚动；本仓清单面不属本 change 的归档条件 |
+| 4.2 生产真库冒烟 | **开放** | 依赖 4.1；开发机同库读路已全绿（spike 报告） |
+| 4.3 生产默认 provider 决策 | **开放** | 属上线决定，需用户拍板（今日现状：默认空值 ⇒ simulated；真源须显式 `MARKET_DATA_SOURCE_ID`） |
+| 4.4 文档 | 已完成 | `8d39201` + `d75ec1a`（本仓 README/.env.example/CLAUDE.md 已改为注册表口径） |
+| 5.1 全量测试 | 已完成 | 2026-11-13：712 passed |
+| 5.2 归档 | 已完成 | 本目录 |
+
+四项开放项都是**需要用户决策或依赖生产动作**的，不由代码侧补齐；
+刻意保留 `[ ]`，以免把"等拍板"写成"已完成"。
