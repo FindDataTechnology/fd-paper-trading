@@ -282,6 +282,124 @@ def test_single_concept_selected_when_multiple_match():
     assert requested == [11]
 
 
+# ---- concept family: against the REAL query, not a stubbed result ----
+#
+# The two tests above pin the *plumbing* (config → attributes) and the
+# *reaction* to `_resolve_concept` returning None. Both stop one step short of
+# the sentence that matters: 「the provider SHALL resolve exactly one concept
+# per family」 —即 `_resolve_concept` 的 WHERE 与 ORDER BY 本身。
+# 证据就在上面：`test_single_concept_selected_when_multiple_match` 造了 `c_first`
+# 却从未把它放进任何返回值，`session.execute` 被 side_effect 直接喂了"已排好序的
+# 结果"。于是把 `.order_by(...)` 整行删掉、或把 `Concept.deprecated.is_(False)`
+# 删掉，这两条测试**都不会红**——判据所在的 SQL 从未被执行过。
+#
+# 下面三条把真模型灌进内存 SQLite，跑真 SQL。Concepts 表只用到
+# Integer/String/Boolean/DateTime，没有 PG 专属类型，所以 SQLite 就是同一个语句形状
+# （不必有真本体库，也不会因为"库里有脏数据"而摆动）。
+
+
+def _concept_session(**rows: dict):
+    """In-memory SQLite holding just the `concepts` table, seeded with `rows`."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from fd_open_data_mcp.models import Base, Concept
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine, tables=[Concept.__table__])
+    session = Session(engine)
+    session.add_all([Concept(**row) for row in rows.values()])
+    session.commit()
+    return session
+
+
+def _family(code="price.close", entity_type="stock", frequency="daily"):
+    return FdOpenDataMarketDataProvider(
+        concept_code=code, entity_type=entity_type, frequency=frequency
+    )
+
+
+def test_verified_concept_wins_even_when_it_has_the_higher_id():
+    # 同族两条都在册（不同 source/era 各登记一份）：verified 优先，id 大小让位——
+    # 「verified desc, id asc」两个键的先后顺序只有这个形状能判出来。
+    session = _concept_session(
+        unverified={"code": "price.close", "entity_type": "stock",
+                    "frequency": "daily", "verified": False},
+        verified={"code": "price.close", "entity_type": "stock",
+                  "frequency": "daily", "verified": True},
+    )
+    try:
+        picked = _family()._resolve_concept(session)
+        assert picked is not None
+        assert picked.verified is True, "未优先 verified 的那条"
+        assert picked.id == 2, "应取 id=2（verified），不是 id=1"
+    finally:
+        session.close()
+
+
+def test_lowest_id_breaks_the_tie_among_equals():
+    # 两条同 verified：必须稳定取最小 id，否则每次连接可能读不同的一行。
+    session = _concept_session(
+        first={"code": "price.close", "entity_type": "stock",
+               "frequency": "daily", "verified": True},
+        second={"code": "price.close", "entity_type": "stock",
+                "frequency": "daily", "verified": True},
+    )
+    try:
+        picked = _family()._resolve_concept(session)
+        assert picked is not None and picked.id == 1
+    finally:
+        session.close()
+
+
+def test_deprecated_family_resolves_to_nothing_never_to_a_neighbour():
+    # 规格「a deprecated concept is a gap, not a crash」的真实形状：被配的那个已废弃，
+    # 而同 code 的另一条还活着。判据是**不能顺手拿活的那条**——配置指定了哪个家族，
+    # 就只能读那个家族；deprecated 过滤掉之后家族不存在 ⇒ None ⇒ data gap。
+    session = _concept_session(
+        retired={"code": "nav.unit", "entity_type": "fund",
+                 "frequency": "daily", "verified": True, "deprecated": True},
+        live={"code": "nav.unit", "entity_type": "fund",
+              "frequency": "daily", "verified": False},
+    )
+    try:
+        # 中间那条 deprecated 被过滤掉，剩下那条是"活着但未 verified"的同族——它仍属于
+        # 同一家族，取它是对的。真正的判据在下一个断言：只剩 deprecated 时必须为 None。
+        picked = _family("nav.unit", "fund", "daily")._resolve_concept(session)
+        assert picked is not None and picked.deprecated is False
+        assert picked.id == 2
+    finally:
+        session.close()
+
+    only_retired = _concept_session(
+        retired={"code": "nav.unit", "entity_type": "fund",
+                 "frequency": "daily", "verified": True, "deprecated": True},
+    )
+    try:
+        assert _family("nav.unit", "fund", "daily")._resolve_concept(only_retired) is None
+    finally:
+        only_retired.close()
+
+
+def test_deprecated_only_family_yields_a_gap_end_to_end():
+    # 端到端：真 SQL 解析不到 → `_fetch_closes_sync` 返回空序列，不抛。
+    # （上面那条 是同一路径的 mock 版，保留它做反应面；这条证明 SQL 面也一致。）
+    session = _concept_session(
+        retired={"code": "price.close", "entity_type": "stock",
+                 "frequency": "daily", "verified": True, "deprecated": True},
+    )
+    fake_db = MagicMock()
+    fake_db.get_session.return_value = session
+    try:
+        with patch.object(mod, "get_database", return_value=fake_db):
+            p = FdOpenDataMarketDataProvider(
+                concept_code="price.close", entity_type="stock", frequency="daily"
+            )
+            assert p._fetch_closes_sync("600036", "2026-07-01", "2026-07-10") == []
+    finally:
+        session.close()
+
+
 # ---- coverage gate: non-fillable concepts are judged, not filled ----
 
 

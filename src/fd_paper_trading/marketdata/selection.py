@@ -176,4 +176,3 @@ def resolve_selection(settings: Any) -> Selection:
         calendar_refs=basket,
         deprecations=(),
     )
-    return Selection(provider=PROVIDER_SIMULATED)
