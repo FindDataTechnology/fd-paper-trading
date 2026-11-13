@@ -3,7 +3,9 @@
 ## Purpose
 
 约束策略 MCP 工具面：模板目录/策略 CRUD/回测/纸面实盘十工具、LLM 可自修复的结构化错误、双传输一致性。
+
 ## Requirements
+
 ### Requirement: Strategy MCP tools
 
 The fd-paper-trading MCP server SHALL expose these tools, each calling the authenticated REST API with the configured token: `list_strategy_templates` (template catalog incl. per-template JSON Schema), `create_strategy`, `update_strategy`, `list_strategies`, `get_strategy`, `run_backtest`, `get_strategy_run`, `start_strategy`, `stop_strategy`, `list_strategy_runs`. The tools SHALL be available on both existing transports (stdio and HTTP/SSE) without transport-specific code.
@@ -30,7 +32,7 @@ When a strategy tool call fails validation (bad spec shape, invalid template par
 
 ### Requirement: Conversational build-backtest-run loop
 
-The chat surfaces (Claude Code via MCP, web chat via CopilotKit consuming the same MCP server) SHALL support the full loop in conversation: choose a template or write code, create the strategy, run a backtest, inspect stats, start/stop a paper run on a chosen account, and review run history. `start_strategy` SHALL require an explicit `account_id`; `list_accounts` remains the discovery path.
+Every chat surface that consumes the fd-paper-trading MCP server (Claude Code via MCP; any platform-side persona) SHALL support the full loop in conversation: choose a template or write code, create the strategy, run a backtest, inspect stats, start/stop a paper run on a chosen account, and review run history. `start_strategy` SHALL require an explicit `account_id`; `list_accounts` remains the discovery path.
 
 #### Scenario: Create then backtest in one conversation
 - **WHEN** a user asks the assistant to build an SMA-crossover strategy on a symbol and backtest it over the past year
@@ -39,11 +41,3 @@ The chat surfaces (Claude Code via MCP, web chat via CopilotKit consuming the sa
 #### Scenario: Start requires an account
 - **WHEN** `start_strategy` is called without an `account_id`
 - **THEN** the tool returns an error prompting for an account (discoverable via `list_accounts`)
-
-### Requirement: CopilotKit runtime prompt gains strategy persona
-
-The CopilotKit runtime's system prompt SHALL describe the strategy tools, the template catalog workflow (list templates -> fill params -> create), and the code-track `ctx` contract (available bar accessors, indicators, `ctx.position`/`ctx.cash`, `ctx.buy`/`ctx.sell` with optional `limit_price`, no imports), so the web chat assistant can author valid strategies without hallucinating the API.
-
-#### Scenario: Prompt documents the ctx contract
-- **WHEN** the CopilotKit runtime prompt is inspected
-- **THEN** it enumerates the ctx accessors and the no-imports rule
