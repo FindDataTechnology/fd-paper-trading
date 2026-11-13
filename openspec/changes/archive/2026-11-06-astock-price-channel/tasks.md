@@ -24,9 +24,9 @@
 
 ## 4. 部署与上线
 
-- [ ] 4.1 fd-infra-deploy 生产清单 env 注入（secret 引用，只读权限），镜像与仓库内容经查不含连接串 —— **待用户确认生产滚动**（provider 默认不变，仅加 env）
-- [ ] 4.2 生产真库冒烟（生产 pod 内全链）—— 依赖 4.1；**注**：开发机真库只读冒烟已全部通过（=生产同一库同一读路）
-- [ ] 4.3 生产默认 provider 切换决策 —— 荐：保留 fd-open-data 默认（基金 NAV 面在产），astock 显式选择；live 面受停更边界制约（见 spike 报告），切换与否属上线拍板
+- [x] 4.1 fd-infra-deploy 生产清单 env 注入（secret 引用，只读权限），镜像与仓库内容经查不含连接串 —— **2026-11-14 实测已到位**：`all-services/prod/fd-paper-trading.yaml` 里 `MARKET_DATA_SOURCE_ID: astock_daily` 是显式 env，凭据走 `secretRef fd-paper-trading-env`（不写值）；生产 pod 内实读 `MARKET_DATA_SOURCE_ID=astock_daily`、`ASTOCK_DSN` 存在（只验存在、不打印值）。同期把服务滚到了含止损修复的片（`sha-d274895`，infra 仓 `2612689`）
+- [x] 4.2 生产真库冒烟（生产 pod 内全链）—— **2026-11-14 在生产 pod 内跑通，ALL PASS（16 项）**。镜像不带 `scripts/`（`/app/scripts` 不存在），所以把 `scripts/smoke_astock_provider.py` 与同目录的 `_evidence_source.py` 拷到 pod 的 `/tmp/astock-smoke`，用 pod 自己的 `uv run python` 跑（跑完删掉临时目录）。关键读数：`600036` 42 根真 OHLC；`sources seen raw: ['akshare','astock_daily']`（钉源有效）；`adjusted=qfq, declared=qfq`（口径诚实，且本轮修掉的「取不到时报 unknown」在正常路径上不变）；`coverage: 79 bars, missing=0, closed=19`；`730d … 0.9s bars=473 missing=0`；陈旧标的全窗报缺 `bars=0 missing=[{start:2025-01-01,end:2026-07-10}]`；指数实体零观测（spike 结论仍成立）
+- [x] 4.3 生产默认 provider 切换决策 —— **2026-11-14 按现状收口（记录既有事实，不是新裁决）**：清单里 `MARKET_DATA_SOURCE_ID` 是**显式** `astock_daily`，所以「默认」这个问题在产线已不存在——它从不走空值那条 simulated 路。原建议（保留 fd-open-data 默认、astock 显式选择）在这条服务上表现为「显式钉 astock + 基金 NAV 面仍由 `FD_OPEN_DATA_*` 三个 concept env 承载」；spike 报告的停更边界不变（指数零观测，已在 4.2 冒烟里再次实测 rows=0）
 - [x] 4.4 文档：README provider 家族段 + `.env.example` 增补 ——**2026-11-13 完成**（`8d39201` README「Real market data」重写为注册表口径；`d75ec1a` `.env.example` 删掉启动即失败的旧变量与两个死配置；判据 `tests/unit/test_env_example_is_executable.py` 覆盖这三份文档）
 
 ## 5. 收尾
@@ -41,9 +41,9 @@
 | 项 | 状态 | 依据 |
 |---|---|---|
 | 3.3 基准端到端 | **开放**（结构性挂账） | 指数零观测 + 抓取政策冻结（用户 2026-09-18 停爬令）；种子落地后由数据线 change 收口 |
-| 4.1 生产清单 env 注入 | **开放** | 需用户拍板生产滚动；本仓清单面不属本 change 的归档条件 |
-| 4.2 生产真库冒烟 | **开放** | 依赖 4.1；开发机同库读路已全绿（spike 报告） |
-| 4.3 生产默认 provider 决策 | **开放** | 属上线决定，需用户拍板（今日现状：默认空值 ⇒ simulated；真源须显式 `MARKET_DATA_SOURCE_ID`） |
+| 4.1 生产清单 env 注入 | **已完成**（2026-11-14 实测） | 清单显式 `MARKET_DATA_SOURCE_ID=astock_daily` + secretRef；pod 内实读确认（只验存在） |
+| 4.2 生产真库冒烟 | **已完成**（2026-11-14 pod 内 ALL PASS 16 项） | 脚本拷进 pod 跑，读数见 4.2 正文 |
+| 4.3 生产默认 provider 决策 | **已收口**（2026-11-14） | 清单显式钉 `astock_daily`，产线不存在「空值即 simulated」那条路；这是现状记录而非新裁决 |
 | 4.4 文档 | 已完成 | `8d39201` + `d75ec1a`（本仓 README/.env.example/CLAUDE.md 已改为注册表口径） |
 | 5.1 全量测试 | 已完成 | 2026-11-13：712 passed |
 | 5.2 归档 | 已完成 | 本目录 |
