@@ -1,0 +1,20 @@
+PASS: get_daily_bars(600036) returns real OHLC — 42 bars, last close=38.8
+PASS: OHLC internally consistent
+PASS: dual spelling 600036.SH same
+PASS: store holds multiple sources for the symbol (pin matters) — sources seen raw: ['akshare', 'astock_daily']
+PASS: provider source arg is pinned
+PASS: coverage caliber matches the declaration — adjusted=qfq, declared=qfq
+PASS: coverage caliber is a contract word — adjusted=qfq
+PASS: coverage has fingerprint
+   coverage: 79 bars, missing=0, closed=19, fill_failed=False
+PASS: clean window not falsely rejected — missing intervals: []
+PASS: name search finds entity — 12 hits: ['001872', '001914', '001965', '001979', '600036']
+PASS: code search finds entity
+PASS: instrument syntactic
+PASS: quote honesty (None when no close in lookback) — quote=('41.15', '41.19')
+PASS: 730d coverage in bounded time — 4.5s bars=473 missing=0 closed=109
+PASS: 730d dense symbol not falsely rejected
+PASS: stale symbol honesty: whole window missing — bars=0 missing=[{'start': '2025-01-01', 'end': '2026-07-10'}]
+PASS: index entities currently carry zero observations (spike evidence) — rows=0
+
+ALL PASS

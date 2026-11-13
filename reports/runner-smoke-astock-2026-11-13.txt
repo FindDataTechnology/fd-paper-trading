@@ -1,0 +1,12 @@
+PASS: real series served — 242 bars
+PASS: sma_cross emits signals on real data — 2 signal bars from 242 bars
+PASS: _first_new_bar finds newer bar — index=235
+PASS: _first_new_bar with nothing newer returns None (tick skip)
+PASS: _latest_close reads the real last close — close=36.88
+PASS: last processed day anchors at the final real bar — last day=2026-07-10
+
+== signal sample (first 5) ==
+(87, '2025-11-12', ["Signal(side='BUY', quantity=Decimal('100'), limit_price=None)"])
+(168, '2026-03-19', ["Signal(side='BUY', quantity=Decimal('100'), limit_price=None)"])
+
+ALL PASS

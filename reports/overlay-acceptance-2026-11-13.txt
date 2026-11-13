@@ -1,0 +1,9 @@
+series: 600036 242 bars 2025-07-01..2026-07-10 (astock_daily, forward)
+PASS: no-overlay run records nothing
+PASS: overlay config recorded on the stopped run
+   stop-loss/trailing triggers on real series: 1
+   - 2026-04-30 trailing_stop level=37.2870 fill=37.2870 (trailing drawdown from peak 41.43)
+PASS: stopped-run stats differ from plain (or triggers empty and stats equal) — plain final=99702.0 stopped final=99734.0
+PASS: tick=bar replay: quote-side fires == bar-side fires — bar=['2025-08-28', '2025-09-18', '2026-01-21', '2026-06-25'] quote=['2025-08-28', '2025-09-18', '2026-01-21', '2026-06-25']
+
+ALL PASS

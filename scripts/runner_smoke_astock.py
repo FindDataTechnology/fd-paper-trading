@@ -24,18 +24,19 @@ from decimal import Decimal
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from fd_paper_trading.marketdata.astock import AstockMarketDataProvider  # noqa: E402
+sys.path.insert(0, os.path.dirname(__file__))  # 同目录的 _evidence_source
+from _evidence_source import EvidenceSourceError, open_provider  # noqa: E402
 from fd_paper_trading.strategy.backtester import build_evaluator  # noqa: E402
 from fd_paper_trading.strategy.ctx import StrategyContext  # noqa: E402
 from fd_paper_trading.strategy.spec import TemplateSpec  # noqa: E402
 
 
 async def main() -> int:
-    dsn = os.environ.get("FD_OPEN_DATA_DSN") or os.environ.get("ASTOCK_DSN")
-    if not dsn:
-        print("FAIL: no read-only DSN")
+    try:
+        p = open_provider()
+    except EvidenceSourceError as exc:
+        print(f"FAIL: {exc}")
         return 2
-    p = AstockMarketDataProvider(dsn=dsn)
     bars = await p.get_daily_bars("600036", "2025-07-01", "2026-07-10")
     fails = []
 

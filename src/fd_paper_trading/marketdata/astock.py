@@ -16,7 +16,10 @@ Design (openspec/changes/astock-price-channel/design.md):
   re-opened here — this reads stored rows for the service's own consumption.
 - D2: symbol normalization accepts ``600036`` and ``600036.SH`` alike; venue
   maps 6/9/5-prefixed codes to XSHG, the rest to XSHE.
-- D4: coverage carries ``adjusted="forward"`` alongside the standard
+- D4: coverage carries the **declared** ``adjusted`` caliber — ``declarations.yaml``
+  is the single source of truth (`8ada860`); for ``astock_daily`` it declares
+  ``qfq``, and the module constant ``_ADJUSTED`` is only the no-registry fallback.
+  Alongside it: the standard
   missing/market_closed/fill_failed/fingerprint contract. The trading
   calendar is derived from the data itself: a date with no ``astock_daily``
   rows market-wide is a day the market produced nothing (weekend/holiday); a

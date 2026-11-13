@@ -32,7 +32,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from fd_paper_trading.marketdata.astock import AstockMarketDataProvider  # noqa: E402
+sys.path.insert(0, os.path.dirname(__file__))  # 同目录的 _evidence_source
+from _evidence_source import EvidenceSourceError, open_provider  # noqa: E402
 
 RESIDUAL_WINDOW = 60          # named window (design D1)
 IR_WINDOW = 60                # named IR lookback
@@ -78,11 +79,11 @@ def returns_from_bars(bars, window):
 
 
 async def main() -> int:
-    dsn = os.environ.get("FD_OPEN_DATA_DSN")
-    if not dsn:
-        print("FAIL: no read-only DSN")
+    try:
+        provider = open_provider()
+    except EvidenceSourceError as exc:
+        print(f"FAIL: {exc}")
         return 2
-    provider = AstockMarketDataProvider(dsn=dsn)
     fails = []
 
     def check(name, ok, detail=""):
@@ -111,13 +112,46 @@ async def main() -> int:
     # ---- universe: fetch real bars for the candidate groups ----
     print("\n== universe (real astock_daily series) ==")
     bars_by_symbol = {}
+    short: dict[str, int] = {}      # code → 窗口内的原始行数（0 = 这条源根本没数据）
     for group, members in GROUPS_CANDIDATE.items():
         for code in members:
             bars = await provider.get_daily_bars(code, "2025-09-01", "2026-07-10")
             if len(bars) >= RESIDUAL_WINDOW + 5:
                 bars_by_symbol[code] = bars
+                continue
+            # 缺的到底"没数据"还是"数据不够长"——两者处置完全不同，
+            # 而"0/4 members with data"这句话两种都读得通（2026-11-13 实测：
+            # 家电 4 只全是**该窗口 0 行**，不是 provider 把行滤掉了）。
+            short[code] = len(bars)
         print(f"   {group}: {sum(1 for m in members if m in bars_by_symbol)}"
               f"/{len(members)} members with data")
+    if short:
+        # 概念 id 走 provider 自己的解析：`price.close` 这个 code 对应**多个** id
+        # （不同 entity_type 各一份），写成标量子查询会 CardinalityViolation
+        # ——2026-11-13 我自己在这条诊断里先犯了一次。
+        close_id = (await provider._concepts("stock")).get("close")
+        raw = {}
+        for code, n_bars in short.items():
+            rows = await provider._fetch(
+                "select count(*) as n from semantic_observations_all "
+                "where concept_id = $1 and granularity='day' and source_used=$2 "
+                "and entity_id = (select id from entities where code=$3 "
+                "and entity_type='stock' limit 1) "
+                "and date >= $4 and date <= $5",
+                close_id, provider._source, code, "2025-09-01", "2026-07-10")
+            raw[code] = (int(rows[0]["n"]) if rows else 0, n_bars)
+        zero_rows = sorted(c for c, (n, _) in raw.items() if n == 0)
+        too_short = sorted(c for c, (n, _) in raw.items() if 0 < n < RESIDUAL_WINDOW + 5)
+        print(f"   缺数据归因：窗口内 0 行 {len(zero_rows)} 只 {zero_rows[:6]}；"
+              f"有行但不足 {RESIDUAL_WINDOW + 5} 根 {len(too_short)} 只 {too_short[:6]}")
+        print("   ⇒ 这是**价格历史深度**不足（同一批标的在有历史的源上可达 80+ 根），"
+              "不是 universe 规模不足，也不是 provider 把行滤掉")
+        print(json.dumps({"item": "price_history_depth", "executable": False,
+                          "reason": f"pinned source {provider._source} 在 "
+                                    f"2025-09-01..2026-07-10 对 {len(zero_rows)} 只候选"
+                                    f"零行、{len(too_short)} 只不足 "
+                                    f"{RESIDUAL_WINDOW + 5} 根；分组可行性因此不可判",
+                          "zero_row_codes": zero_rows, "too_short_codes": too_short}))
 
     # ---- 3.3 group-count feasibility (BEFORE any ranking) ----
     usable_groups = {g: [m for m in members if m in bars_by_symbol]

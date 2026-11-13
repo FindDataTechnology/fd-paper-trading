@@ -24,16 +24,20 @@ from decimal import Decimal
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from fd_paper_trading.marketdata.astock import AstockMarketDataProvider  # noqa: E402
+sys.path.insert(0, os.path.dirname(__file__))  # 同目录的 _evidence_source
+from _evidence_source import EvidenceSourceError, open_provider  # noqa: E402
+
+from fd_paper_trading._vendor.fd_quant.contracts.models import (  # noqa: E402
+    PRICE_ADJUSTMENTS,
+)
 
 
 async def main() -> int:
-    dsn = os.environ.get("FD_PAPER_TRADING_ASTOCK_DSN") or os.environ.get(
-        "ASTOCK_DSN") or os.environ.get("FD_OPEN_DATA_DSN")
-    if not dsn:
-        print("FAIL: no read-only DSN in env")
+    try:
+        p = open_provider()
+    except EvidenceSourceError as exc:
+        print(f"FAIL: {exc}")
         return 2
-    p = AstockMarketDataProvider(dsn=dsn)
     fails = 0
 
     def check(name, ok, detail=""):
@@ -66,7 +70,16 @@ async def main() -> int:
     end = date(2026, 7, 10)
     start = end - timedelta(days=120)
     cov = await p.get_bars_with_coverage("600036", start.isoformat(), end.isoformat())
-    check("coverage reports caliber", cov.get("adjusted") == "forward",
+    # 口径跟**声明**比，不自带一份字面量。`8ada860` 把 coverage 的口径改成读
+    # `declarations.yaml`（astock_daily 声明是 qfq），这条断言原本写死 "forward"
+    # （旧的模块常量），于是 2026-11-13 修好取源后第一次真跑就假红。
+    # 检查器自己抄一份真值，就是下一个"两套口径"。
+    declared = p._declared_adjustment()
+    check("coverage caliber matches the declaration",
+          cov.get("adjusted") == declared,
+          f"adjusted={cov.get('adjusted')}, declared={declared}")
+    check("coverage caliber is a contract word",
+          cov.get("adjusted") in PRICE_ADJUSTMENTS,
           f"adjusted={cov.get('adjusted')}")
     check("coverage has fingerprint", bool(cov.get("fingerprint")))
     print(f"   coverage: {len(cov['bars'])} bars, missing={len(cov['missing'])}, "
