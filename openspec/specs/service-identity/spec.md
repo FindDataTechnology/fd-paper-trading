@@ -68,7 +68,9 @@ prefix is read as find**d**ata **t**rade.
 ### Requirement: Environment variable names do not embed the old identifier
 
 Environment variables SHALL NOT carry the retired name. Variables whose names are generic
-(`DATABASE_URL`, `MARKET_DATA_PROVIDER`) SHALL remain unchanged; the MCP client's
+(`DATABASE_URL`) SHALL remain unchanged; the market-data selection variable is
+`MARKET_DATA_SOURCE_ID` (the legacy `MARKET_DATA_PROVIDER` was removed and fails startup when
+still set); the MCP client's
 connection variables SHALL be `PAPER_TRADING_API_URL` and `PAPER_TRADING_API_TOKEN`.
 
 #### Scenario: MCP client configuration uses the new names

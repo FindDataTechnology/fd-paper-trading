@@ -12,8 +12,10 @@ The system SHALL define a `MarketDataProvider` abstraction with these operations
 `get_quote(symbol) -> Quote | None` (async), `get_instrument(symbol) -> Instrument | None`,
 `search_instruments(query)`, and `get_bars(symbol, timeframe, limit)`. A `Quote` SHALL carry
 `instrument_id`, `bid`, `ask`, and `ts_event`. `get_quote` returning `None` SHALL signify a
-data gap (no live quote available). The provider is selected at app startup from
-`MARKET_DATA_PROVIDER` (`simulated` | `polygon` | `fd-open-data`).
+data gap (no live quote available). The provider is selected at app startup via
+`MARKET_DATA_SOURCE_ID` resolved through the price-source registry (see "Provider is
+swappable"); this requirement does not carry its own provider enumeration, so adding a source
+does not require editing it.
 
 #### Scenario: Quote carries bid and ask
 
@@ -77,17 +79,17 @@ as the precondition for accepting an order for that symbol.
 
 ### Requirement: Provider is swappable
 
-The market-data layer SHALL expose a single interface so the simulated, Polygon, fd-open-data, and astock providers are interchangeable, and a real-time provider (e.g. Databento NBBO) can be added later without changing consumers. Selection SHALL be via the `MARKET_DATA_PROVIDER` environment variable.
+The market-data layer SHALL expose a single interface so the simulated, Polygon, fd-open-data, and astock providers are interchangeable, and a real-time provider (e.g. Databento NBBO) can be added later without changing consumers. Selection SHALL be via `MARKET_DATA_SOURCE_ID`, a source id registered in the price-source registry: the declared `access.kind` decides the provider class (`federated_view` → the astock/federated provider, `fd_open_data_ontology` → the fd-open-data provider, `polygon` → the Polygon provider, `simulated` → the simulated provider). An unset source id SHALL select the simulated provider. An id that is not registered SHALL fail startup with the id named — never a silent fallback to another provider. The legacy selectors `MARKET_DATA_PROVIDER` / `ASTOCK_SOURCE` / `ASTOCK_CALENDAR_REFS` were removed; a run that still has them set SHALL fail startup naming them, because "I changed it" and "it never took effect" must not look the same.
 
 #### Scenario: Selecting the provider at startup
-- **WHEN** `MARKET_DATA_PROVIDER=polygon` (with a key)
-- **THEN** the app uses `PolygonMarketDataProvider`
-- **AND WHEN** `MARKET_DATA_PROVIDER=fd-open-data`
-- **THEN** the app uses `FdOpenDataMarketDataProvider`
-- **AND WHEN** `MARKET_DATA_PROVIDER=astock` (with a read-only DSN configured)
-- **THEN** the app uses `AstockMarketDataProvider`
-- **AND WHEN** `MARKET_DATA_PROVIDER=simulated` (or unset/unknown)
+- **WHEN** `MARKET_DATA_SOURCE_ID` is unset
 - **THEN** the app uses `SimulatedMarketDataProvider`
+- **AND WHEN** `MARKET_DATA_SOURCE_ID=astock_daily` (registered, `access.kind=federated_view`, read-only DSN configured)
+- **THEN** the app uses `AstockMarketDataProvider` with `db_source=astock_daily`
+- **AND WHEN** `MARKET_DATA_SOURCE_ID` names an id the registry does not carry
+- **THEN** startup fails with that id named, rather than falling through to another provider
+- **AND WHEN** a legacy variable (`MARKET_DATA_PROVIDER` / `ASTOCK_SOURCE` / `ASTOCK_CALENDAR_REFS`) is still present in the environment
+- **THEN** startup fails naming the offending variable(s)
 
 ### Requirement: fd-open-data provider (real daily bars and latest-close quotes)
 
@@ -119,7 +121,10 @@ reads from configuration. Timeframes other than `1d` are unsupported by this pro
 
 ### Requirement: One price world for backtest, live, and manual fills
 
-When `MARKET_DATA_PROVIDER=fd-open-data`, the same provider instance SHALL feed strategy backtests (historical daily bars), live strategy ticks (latest bar), and order fills (quote). Consumers SHALL NOT mix price series across providers within one app process.
+Whichever provider the startup selection resolves to (see "Provider is swappable"), that same
+provider instance SHALL feed strategy backtests (historical daily bars), live strategy ticks
+(latest bar), and order fills (quote). Consumers SHALL NOT mix price series across providers
+within one app process.
 
 #### Scenario: Backtest and fills share the series
 - **WHEN** a strategy is backtested and its signals reference bar closes
