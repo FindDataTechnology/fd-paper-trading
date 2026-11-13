@@ -58,6 +58,34 @@ uv run fd-paper-trading
 
 > **注意：** 在 macOS 上，如果 5432 端口被占用，Homebrew 的 `postgresql@14` 可能运行在 5433 端口。请相应调整 `.env` 中的 `DATABASE_URL`。
 
+### 真实行情数据
+
+选择器**只有一个变量**：`MARKET_DATA_SOURCE_ID`——fd-open-data-mcp 的行情源注册表
+（`price_sources/declarations.yaml`）里登记的源 id。注册表声明每个源用哪种协议访问
+（`access.kind`），协议决定 provider 类；换源是改声明，不是改代码。
+
+```bash
+# 今天已登记的三个源（都走平台联邦视图，凭据槽 ASTOCK_DSN）：
+#   astock_daily  前复权 A 股日线
+#   akshare       平台侧 akshare 落库的同族数据
+#   index-seed    指数种子
+export ASTOCK_DSN='…'            # read-only DSN (same value as FD_OPEN_DATA_DSN)
+MARKET_DATA_SOURCE_ID=astock_daily uv run fd-paper-trading
+```
+
+`MARKET_DATA_SOURCE_ID` 留空即是模拟源（确定性合成报价，无需 key，适合开发与测试）。
+注册表里没有的 id 会**启动失败并点名**，不会静默回落到别的 provider。
+
+> 旧选择器 `MARKET_DATA_PROVIDER` / `ASTOCK_SOURCE` / `ASTOCK_CALENDAR_REFS` 的兼容映射
+> **已删除**。环境里还留着任何一个，启动都会失败并点名——升级前请从 `.env` 里删掉。
+
+> 走本体库的 `fd-open-data` provider 仍在（`marketdata/fd_open_data.py`），但**当前无法
+> 通过配置选中**：注册表里没有任何源声明 `access.kind: fd_open_data_ontology`，只能被
+> 直接构造（测试/脚本）。它的一次性本体库 bootstrap（`uv run python scripts/setup_fd_open_data.py`）
+> 与 concept family（`FD_OPEN_DATA_CONCEPT` / `FD_OPEN_DATA_ENTITY_TYPE` /
+> `FD_OPEN_DATA_FREQUENCY`，默认 `nav.unit` / `fund` / `daily`）只在有源为它登记后才有意义。
+> 已废弃的 concept 退化为数据缺口，绝不报错。
+
 ### 开发模式
 
 ```bash
