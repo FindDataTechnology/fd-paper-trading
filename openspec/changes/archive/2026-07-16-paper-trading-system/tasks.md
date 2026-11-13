@@ -21,4 +21,4 @@
 
 - [x] 3.1 Run `openspec validate paper-trading-system` and fix any reported issues - PASS ("Change 'paper-trading-system' is valid")
 - [x] 3.2 Confirm no `src/fd_trade/` files were modified by this change (spec-only) - CONFIRMED: all writes under `openspec/changes/paper-trading-system/`; `src/` untouched
-- [ ] 3.3 Consolidate the five capability specs into `openspec/specs/{user-auth,paper-accounts,market-data,order-execution,trading-api}/spec.md` (the specs/ baseline this change establishes) - PERFORMED BY `/opsx:archive`: consolidation into `openspec/specs/` is the archive step (`openspec archive` applies the ADDED-Requirements deltas to the empty `openspec/specs/` and moves the change to `archive/`). Left for an explicit `/opsx:archive` invocation because it is a hard-to-reverse lifecycle action.
+- [x] 3.3 Consolidate the five capability specs into `openspec/specs/{user-auth,paper-accounts,market-data,order-execution,trading-api}/spec.md` — **已完成**：五个 capability 都在 `openspec/specs/` 下（`openspec list --specs` 可见），本 change 亦已移入 `archive/`。当时留未勾是因为它是 hard-to-reverse 动作；那次 `/opsx:archive` 已经执行过，未勾只是没回来补。
