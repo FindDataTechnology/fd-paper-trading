@@ -6,7 +6,16 @@
 
 ## 2. 规格侧
 
-- [ ] 2.1 写 delta：把口径取值的字面量改为声明值（保留两条场景原名）
-- [ ] 2.2 `openspec validate fix-coverage-caliber-word --strict`
-- [ ] 2.3 `openspec archive fix-coverage-caliber-word --yes`，对账 `~ 1 modified`
-- [ ] 2.4 `openspec validate astock-market-data --type spec --strict` 复核
+> 2026-11-13 复核补记：归档时 2.1-2.4 未勾。核过——
+>
+> - 2.1 delta 已生效：`astock-market-data:86-88` 现为「coverage result SHALL additionally
+>   carry the provider's adjustment caliber **as declared by the price-source registry** —
+>   for the `astock_daily` family the declaration is `qfq`（the contract vocabulary is
+>   `qfq` / `hfq` / `none` / `not_applicable`）」，两条场景原名保留；
+> - 2.2/2.3 是那次归档自身的动作（归档记录即证据，无法重跑）；
+> - 2.4 复核：`openspec validate astock-market-data --type spec --strict` → exit 0。
+
+- [x] 2.1 写 delta：把口径取值的字面量改为声明值（保留两条场景原名）
+- [x] 2.2 `openspec validate fix-coverage-caliber-word --strict`
+- [x] 2.3 `openspec archive fix-coverage-caliber-word --yes`，对账 `~ 1 modified`
+- [x] 2.4 `openspec validate astock-market-data --type spec --strict` 复核
