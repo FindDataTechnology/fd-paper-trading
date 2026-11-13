@@ -62,7 +62,16 @@ export function shouldUnsubscribe(prev: number | undefined, next: number): boole
   return (prev ?? 0) > 0 && next <= 0;
 }
 
-function backoffDelay(attempts: number): number {
+/**
+ * 重连退避：1s、2s、4s…，上限 15s。
+ *
+ * 导出是为了可测——`web-realtime` 规格要求「auto-reconnects with backoff on drop,
+ * and re-establishes subscriptions after reconnect」，而这句话此前**零覆盖**：
+ * 现有 5 条 vitest 只测 reducer（applyQuote / isOrderEvent / 订阅计数）。
+ * 退避公式一旦被改错（比如上限写成 150_000，或指数写成 attempts+1），
+ * 断线后要么几十秒才回来、要么第一次就等 2s——两种都不会让任何测试变红。
+ */
+export function backoffDelay(attempts: number): number {
   return Math.min(1000 * 2 ** attempts, 15_000);
 }
 
