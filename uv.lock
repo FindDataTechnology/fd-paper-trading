@@ -738,7 +738,7 @@ server = [
 
 [[package]]
 name = "fd-open-data-mcp"
-version = "0.5.60"
+version = "0.5.64"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "alembic" },
@@ -758,9 +758,9 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d2/63/aae302fff2f398107074f326367b9763d5ba17caf1aaf407e92ef986c4ca/fd_open_data_mcp-0.5.60.tar.gz", hash = "sha256:ee33e482ab71348d76cf59f66cda136d259c1ba89913c2f620e0be7e8e00c833", size = 1292617, upload-time = "2026-11-10T06:38:02.184Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/eb/64/7106aa84df84de4d5fb7e2df22a3f252ca7916a0f6f84db5be1b6169de7a/fd_open_data_mcp-0.5.64.tar.gz", hash = "sha256:7a7a229c3a08a70393b01db96e7230e1a6bda5a0db8e04050f01ac77791552c6", size = 1459667, upload-time = "2026-11-14T09:56:31.041Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/d3/8cff8698781095d2589291ef4852544430dc8ed9b60691795456ba8a8464/fd_open_data_mcp-0.5.60-py3-none-any.whl", hash = "sha256:3c638b0fbd1c224f67a9c1cb895cab916083b437f8a1e30bc66fddb16dd9f868", size = 894471, upload-time = "2026-11-10T06:38:00.673Z" },
+    { url = "https://files.pythonhosted.org/packages/89/cf/f2bb63857fc780cc50897f3afc4ddb555fe1a09a861057d4e8fe3135bc7d/fd_open_data_mcp-0.5.64-py3-none-any.whl", hash = "sha256:8b07c52a56046cd9b53f6fdbd390202ed5c4042245bb5f7e34de8a70cbef681e", size = 948247, upload-time = "2026-11-14T09:56:29.374Z" },
 ]
 
 [package.optional-dependencies]
