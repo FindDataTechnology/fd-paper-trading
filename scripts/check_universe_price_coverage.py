@@ -153,10 +153,13 @@ def judge(facts: Iterable[SymbolFact], *, today: date, max_age_days: int,
     verdicts: list[Verdict] = []
     for f in facts:
         if not is_astock_symbol(f.symbol):
-            # 非 A 股形状（AAPL 之类）不归这条通道：其他市场有自己的 provider。
-            # 报事实、不计数——把它算成缺口会让人去查一条本就不该管的链。
+            # 非 A 股形状（AAPL 之类）本部署的 provider 解析不出 ⇒ 下单会
+            # `unknown_instrument`。只报事实、不计数：把它算成缺口，会让一条
+            # 契约夹具策略（6.4 机制验证）把整条闸变成常年红。但措辞不能说成
+            # 「其他市场另有取源」——那是假设，本闸没有能力验证它。
             verdicts.append(Verdict(f.symbol, "out_of_scope",
-                                    "非 A 股代码形状，不归本通道（其他市场另有取源）"))
+                                    "非 A 股代码形状：本部署的 provider 解析不出它 "
+                                    "⇒ 下单会 unknown_instrument（是否有别的取源不在本闸视野内）"))
             continue
         if f.error:
             # 取数本身报错（库/源挂了）不是"这个标的没价"，必须与缺口分开：
@@ -297,6 +300,52 @@ def _self_test() -> int:
 
 # ---------------------------------------------------------------- main
 
+#: 每条策略的可用性结论。判据只看标的状态，不看策略"是不是在用"——`strategies`
+#: 表**没有 enabled/status 列**（2026-11-14 实测 9 条一视同仁），所以「这条策略
+#: 现在能不能下单」只能按它的 universe 逐个标的算，不能靠一个标志位分级。
+STRATEGY_BLOCKED = "blocked"       # 至少一个标的下单会被拒
+STRATEGY_DEGRADED = "degraded"     # 没有硬拒，但有已声明的缺口（如场外基金无交易所价）
+STRATEGY_TRADABLE = "tradable"
+
+
+def strategy_verdicts(verdicts: list[Verdict],
+                      symbols: dict[str, list[str]]) -> list[tuple[str, str, list[Verdict]]]:
+    """(策略名, 结论, 造成该结论的标的) —— 按策略反查。
+
+    这条视图是为了回答一个标的清单答不了的问题：**哪条策略还能下单**。
+    9 条策略共用少数几个标的时，标的级命中会让人以为"三只票有问题"，
+    实际影响面是"其中 1 条策略全灭、6 条带一个已声明缺口"。
+    """
+    by_state = {v.symbol: v for v in verdicts}
+    out: list[tuple[str, str, list[Verdict]]] = []
+    for name in sorted({n for names in symbols.values() for n in names}):
+        mine = [by_state[s] for s, names in symbols.items() if name in names and s in by_state]
+        blocking = [v for v in mine if v.counts]
+        degraded = [v for v in mine if v.state in ("declared_gap", "out_of_scope")]
+        if blocking:
+            out.append((name, STRATEGY_BLOCKED, blocking))
+        elif degraded:
+            out.append((name, STRATEGY_DEGRADED, degraded))
+        else:
+            out.append((name, STRATEGY_TRADABLE, []))
+    return out
+
+
+def _print_by_strategy(verdicts: list[Verdict], symbols: dict[str, list[str]]) -> None:
+    rows = strategy_verdicts(verdicts, symbols)
+    if not rows:
+        return
+    marks = {STRATEGY_BLOCKED: "✗", STRATEGY_DEGRADED: "·", STRATEGY_TRADABLE: "✓"}
+    print("\n按策略看（能不能下下一单）：")
+    for name, state, culprits in rows:
+        if state == STRATEGY_TRADABLE:
+            print(f"  {marks[state]} {name}: 全部标的可交易")
+            continue
+        why = "；".join(f"{v.symbol} {v.state}" for v in culprits)
+        tail = " ⇒ 下单会被拒" if state == STRATEGY_BLOCKED else "（不硬拒，但按当前口径拿不到交易所价）"
+        print(f"  {marks[state]} {name}: {why}{tail}")
+
+
 def _print_human(verdicts: list[Verdict], symbols: dict[str, list[str]],
                  max_age_days: int | None = None) -> None:
     marks = {"ok": "✓", "stale": "✗", "unpriceable": "✗",
@@ -317,6 +366,7 @@ def _print_human(verdicts: list[Verdict], symbols: dict[str, list[str]],
         f"out_of_scope={sum(v.state == 'out_of_scope' for v in verdicts)}"
         f"（后两者不计命中）⇒ 命中 {len(counted)}"
     )
+    _print_by_strategy(verdicts, symbols)
 
 
 async def _amain(args: argparse.Namespace, *, max_age_days: int) -> int:

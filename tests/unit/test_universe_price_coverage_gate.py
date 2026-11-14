@@ -131,3 +131,39 @@ def test_self_test_branches_all_pass():
 ])
 def test_astock_symbol_shape(sym, ok):
     assert gate.is_astock_symbol(sym) is ok
+
+
+# ---------------------------------------------------------------- 按策略看
+
+def test_strategy_blocked_when_any_symbol_is_a_hit():
+    """一个标的被拒 ⇒ 这条策略下不了单。9 条策略共用少数标的时，
+    标的级命中会让人以为「三只票有问题」，实际影响面是「其中几条策略全灭」。"""
+    facts = [
+        gate.SymbolFact("600000", quote=True, last_bar="2026-11-09"),
+        gate.SymbolFact("510300", quote=True, last_bar="2026-11-13"),
+    ]
+    verdicts = gate.judge(facts, today=TODAY, max_age_days=4)
+    symbols = {"600000": ["batch6-c2-sma"], "510300": ["batch6-c2-sma", "消费三兄弟等权"]}
+    rows = {name: state for name, state, _ in gate.strategy_verdicts(verdicts, symbols)}
+    assert rows["batch6-c2-sma"] == gate.STRATEGY_BLOCKED
+    assert rows["消费三兄弟等权"] == gate.STRATEGY_TRADABLE
+
+
+def test_strategy_degraded_for_a_declared_gap_only():
+    """已声明的缺口（场外基金无交易所价）不硬拒，但也不能说「可交易」。"""
+    verdicts = gate.judge([gate.SymbolFact("007355", quote=False)],
+                          today=TODAY, max_age_days=4,
+                          declared={"007355": {"reason": "只有净值", "fix": "按 NAV 估值"}})
+    rows = {name: state for name, state, _ in gate.strategy_verdicts(
+        verdicts, {"007355": ["sma007355"]})}
+    assert rows["sma007355"] == gate.STRATEGY_DEGRADED
+
+
+def test_strategy_view_marks_out_of_scope_as_degraded_not_tradable():
+    """AAPL 在 astock provider 下解析不出（下单会 unknown_instrument），
+    所以那条策略不能报「可交易」——这是实测，不是假设。"""
+    verdicts = gate.judge([gate.SymbolFact("AAPL", quote=False)],
+                          today=TODAY, max_age_days=4)
+    rows = {name: state for name, state, _ in gate.strategy_verdicts(
+        verdicts, {"AAPL": ["6.4 机制验证"]})}
+    assert rows["6.4 机制验证"] == gate.STRATEGY_DEGRADED
