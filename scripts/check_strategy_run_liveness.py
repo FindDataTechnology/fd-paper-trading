@@ -37,9 +37,19 @@ if last_processed == latest_date.isoformat():
 ## 判据与退出码
 
 `ok` — run 已处理到该标的的最新 bar，且没超过交易侧新鲜度阈值；
-`runner_lag` — 有更新的 bar 却没处理（命中）；
+`runner_waiting` — 库里已有更新的 bar，但上一次认领租约还不到一个轮询周期
+（`settings.strategy_poll_seconds`，生产 1800s）⇒ **下一拍会自己吃掉，不必重启**
+（不计命中，只打一条事实）；
+`runner_lag` — 有更新的 bar 却没处理，且**已经过了一个完整轮询周期**（命中）；
 `data_stalled` — 处理到的就是最新，但已超过阈值（命中）；
 `undetermined` — 取不到 run 的标的（无 universe/params）或行情源读不到（退 2，不许退 0）。
+
+**为什么要单列 `runner_waiting`**（2026-11-14 实测）：备源把 600000 的缺口日补进来之后
+21 分钟，这道闸判「runner_lag ⇒ 重启 runner 能修」，而 runner 的轮询周期是 30 分钟、
+下一次认领在 9 分钟后——它自己就走了，`last_bar_date` 从 11-09 跳到 11-13。判据少这一维，
+就会把「还没轮到」报成「卡住了」，而照它去重启一个健康进程是纯粹的风险动作。
+认领时刻由租约反推：`lease_until = 认领时刻 + 3×poll`（`runner.py:_claim_lease`）；
+取不到就按保守处理（仍报 `runner_lag`），不许把「判不出」读成「在等」。
 
     python scripts/check_strategy_run_liveness.py
     python scripts/check_strategy_run_liveness.py --json
@@ -89,6 +99,13 @@ class RunFact:
     last_bar_processed: str | None
     symbol_latest_bar: str | None
     error: str | None = None
+    #: 距上一次认领租约过了多少秒（`lease_until - 3×poll` 反推，见 `_load_facts`）。
+    #: 没有它，`runner_lag` 会把「正常在等下一拍」也报成「卡住了」——2026-11-14
+    #: 实测：备源补数写进 600000 之后 21 分钟，这道闸判「重启 runner 能修」，
+    #: 而 runner 的轮询周期是 1800 秒，下一次认领在 9 分钟后，它自己就走了。
+    claim_age_seconds: float | None = None
+    #: 该进程的轮询周期（秒），与被判对象同源（`settings.strategy_poll_seconds`）。
+    poll_seconds: float | None = None
 
 
 @dataclass
@@ -96,12 +113,26 @@ class Verdict:
     run_id: str
     strategy: str
     symbol: str | None
-    state: str          # ok | runner_lag | data_stalled | undetermined
+    # ok | runner_waiting | runner_lag | data_stalled | undetermined
+    state: str
     detail: str
 
     @property
     def counts(self) -> bool:
         return self.state in ("runner_lag", "data_stalled")
+
+
+def _tick_due_in(f: RunFact) -> float | None:
+    """距下一拍还有多少秒；拿不到周期/认领时刻 ⇒ None（判不出，按保守处理）。
+
+    `lease_until = 认领时刻 + 3×poll`（`runner.py:_claim_lease`），所以
+    认领时刻 = `lease_until - 3×poll`，`claim_age = now - 认领时刻`。
+    这套算术对「进程死了」同样成立：死在刚认领之后 ⇒ claim_age 小 ⇒ 判在等下一拍
+    （本来也还没到）；到了第二拍仍没续租 ⇒ claim_age > poll ⇒ 才报卡住。
+    """
+    if f.claim_age_seconds is None or not f.poll_seconds:
+        return None
+    return f.poll_seconds - f.claim_age_seconds
 
 
 def judge(facts: Iterable[RunFact], *, today: date, max_age_days: int) -> list[Verdict]:
@@ -130,11 +161,27 @@ def judge(facts: Iterable[RunFact], *, today: date, max_age_days: int) -> list[V
 
         if latest > processed:
             behind = (latest - processed).days
+            wait = _tick_due_in(f)
+            if wait is not None and wait > 0:
+                # 库里已经有新 bar，但还没到下一拍：这不是「卡住」，是「还没轮到」。
+                # 报成一档**不计命中**的事实——判据要能说得清「现在该做什么」，
+                # 而这里该做的是「等」，不是「重启」。
+                out.append(Verdict(
+                    f.run_id, f.strategy, f.symbol, "runner_waiting",
+                    f"库里 {f.symbol} 已有 {f.symbol_latest_bar} 的 bar，而 run 还停在 "
+                    f"{f.last_bar_processed}（落后 {behind} 天）——但上一次认领租约在 "
+                    f"{f.claim_age_seconds / 60:.0f} 分钟前，轮询周期 {f.poll_seconds / 60:.0f} "
+                    f"分钟，下一拍约 {wait / 60:.0f} 分钟后；先等这一拍再说，不必重启",
+                ))
+                continue
+            waited = ("" if wait is None else
+                      f"；已过了一个完整轮询周期（上次认领 {f.claim_age_seconds / 60:.0f} 分钟前"
+                      f" > 周期 {f.poll_seconds / 60:.0f} 分钟）")
             out.append(Verdict(
                 f.run_id, f.strategy, f.symbol, "runner_lag",
                 f"库里 {f.symbol} 已有 {f.symbol_latest_bar} 的 bar，而 run 停在 "
                 f"{f.last_bar_processed}（落后 {behind} 天）⇒ runner 没在推进，"
-                f"重启/看 runner 日志，不是采集问题",
+                f"重启/看 runner 日志，不是采集问题{waited}",
             ))
             continue
 
@@ -180,15 +227,19 @@ async def _load_facts(max_runs: int) -> list[RunFact]:
     from fd_paper_trading.persistence.base import create_database
 
     db = create_database(get_settings().database_url)
+    poll_seconds = float(get_settings().strategy_poll_seconds)
     try:
         async with db.session_factory() as session:
             rows = (await session.execute(text(
                 "select r.id, s.name, s.spec, r.params, r.error, "
-                "       r.params->>'last_bar_date' as last_bar "
+                "       r.params->>'last_bar_date' as last_bar, "
+                "       r.runner_lease_until, "
+                "       extract(epoch from now() - "
+                "         (r.runner_lease_until - make_interval(secs => :lease))) as claim_age "
                 "  from strategy_runs r join strategies s on s.id = r.strategy_id "
                 " where upper(r.status) = any(:live) order by r.created_at desc "
                 f" limit {int(max_runs)}"
-            ), {"live": list(LIVE_STATUSES)})).all()
+            ), {"live": list(LIVE_STATUSES), "lease": 3 * poll_seconds})).all()
     finally:
         await db.engine.dispose()
 
@@ -216,6 +267,8 @@ async def _load_facts(max_runs: int) -> list[RunFact]:
         facts.append(RunFact(
             run_id=str(r[0])[:8], strategy=str(r[1]), symbol=symbol,
             last_bar_processed=r[5], symbol_latest_bar=latest, error=err,
+            claim_age_seconds=(float(r[7]) if r[7] is not None else None),
+            poll_seconds=poll_seconds,
         ))
     return facts
 
@@ -223,16 +276,23 @@ async def _load_facts(max_runs: int) -> list[RunFact]:
 # ---------------------------------------------------------------- self-test
 
 def _self_test() -> int:
-    """四档各证一次 + 一条绿路。省掉绿路，「全都判红」与「判据写反」同形。"""
+    """五档各证一次 + 一条绿路。省掉绿路，「全都判红」与「判据写反」同形。"""
     today = date(2026, 11, 14)
+    POLL = 1800.0
     facts = [
         RunFact("a1", "pushing", "600000", "2026-11-13", "2026-11-13"),   # ok
-        RunFact("b2", "stuck", "600000", "2026-11-06", "2026-11-13"),     # runner_lag
+        # 已有新 bar，但上一次认领在 5 分钟前（周期 30 分钟）⇒ 还在等下一拍
+        RunFact("e5", "waiting", "600000", "2026-11-09", "2026-11-13",
+                claim_age_seconds=300.0, poll_seconds=POLL),
+        # 已有新 bar，且已过一个完整周期还没续租 ⇒ 真卡住
+        RunFact("b2", "stuck", "600000", "2026-11-06", "2026-11-13",
+                claim_age_seconds=2400.0, poll_seconds=POLL),
         RunFact("c3", "frozen", "600000", "2026-11-09", "2026-11-09"),    # data_stalled
         RunFact("d4", "blind", None, None, None),                         # undetermined
     ]
     got = {v.run_id: v.state for v in judge(facts, today=today, max_age_days=4)}
-    expected = {"a1": "ok", "b2": "runner_lag", "c3": "data_stalled", "d4": "undetermined"}
+    expected = {"a1": "ok", "e5": "runner_waiting", "b2": "runner_lag",
+                "c3": "data_stalled", "d4": "undetermined"}
     ok = got == expected
     for k, want in expected.items():
         print(f"  {'✓' if got.get(k) == want else '✗'} {k}: want={want} got={got.get(k)}")
@@ -242,7 +302,15 @@ def _self_test() -> int:
     reasons = {v.run_id: v.detail for v in judge(facts, today=today, max_age_days=4)}
     split = ("runner 没在推进" in reasons["b2"]) and ("数据停了" in reasons["c3"])
     print(f"  {'✓' if split else '✗'} 两种成因各自点名（runner_lag ≠ data_stalled）")
-    return 0 if ok and len(counted) == 2 and split else 1
+    # 「等下一拍」必须与「卡住」分开，且同一份新 bar 下两者只差一个认领时刻
+    wait_ok = ("下一拍" in reasons["e5"]) and ("卡住" not in reasons["e5"])
+    print(f"  {'✓' if wait_ok else '✗'} 未到下一拍报「等一拍」而不是「卡住」（{reasons['e5'][:24]}…）")
+    # 拿不到认领时刻/周期时按保守处理：仍报卡住，不许静默读成「在等」
+    blind = judge([RunFact("f6", "no-lease", "600000", "2026-11-06", "2026-11-13")],
+                  today=today, max_age_days=4)[0]
+    cons_ok = blind.state == "runner_lag"
+    print(f"  {'✓' if cons_ok else '✗'} 认领时刻取不到 ⇒ 保守报 runner_lag（got={blind.state}）")
+    return 0 if (ok and len(counted) == 2 and split and wait_ok and cons_ok) else 1
 
 
 # ---------------------------------------------------------------- main
@@ -261,6 +329,11 @@ def _inject(facts: list[RunFact], *, lag: str | None, stalled: str | None,
             if kind == "runner-lag":
                 f.last_bar_processed = (today - timedelta(days=7)).isoformat()
                 f.symbol_latest_bar = today.isoformat()
+                # 必须把认领时刻也推到「已过一个完整周期」：真行的认领时刻往往是
+                # 刚才（几分钟内），不推的话注入会落进 runner_waiting、不计命中，
+                # 红证就「失败得像成功」了（同 --assume-zero-yield 只注一次的坑）。
+                f.poll_seconds = f.poll_seconds or 1800.0
+                f.claim_age_seconds = f.poll_seconds * 2
             else:
                 old = (today - timedelta(days=7)).isoformat()
                 f.last_bar_processed = old
@@ -270,7 +343,8 @@ def _inject(facts: list[RunFact], *, lag: str | None, stalled: str | None,
 
 
 def _print_human(verdicts: list[Verdict], max_age_days: int) -> None:
-    marks = {"ok": "✓", "runner_lag": "✗", "data_stalled": "✗", "undetermined": "?"}
+    marks = {"ok": "✓", "runner_waiting": "·", "runner_lag": "✗",
+             "data_stalled": "✗", "undetermined": "?"}
     for v in verdicts:
         print(f"{marks[v.state]} {v.run_id} {v.strategy}"
               f"{' [' + v.symbol + ']' if v.symbol else ''} [{v.state}] {v.detail}")
@@ -279,6 +353,7 @@ def _print_human(verdicts: list[Verdict], max_age_days: int) -> None:
     print(f"\n活着且需要判断的 run {len(verdicts)} 条（阈值 {max_age_days} 天，"
           f"{'= 交易侧 stale_quote' if max_age_days == trading_max_age_days() else '命令行指定'}）："
           f"ok={sum(v.state == 'ok' for v in verdicts)} "
+          f"runner_waiting={sum(v.state == 'runner_waiting' for v in verdicts)} "
           f"runner_lag={sum(v.state == 'runner_lag' for v in verdicts)} "
           f"data_stalled={sum(v.state == 'data_stalled' for v in verdicts)} "
           f"undetermined={len(und)} ⇒ 命中 {len(counted)}")

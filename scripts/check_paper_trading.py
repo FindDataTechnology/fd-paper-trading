@@ -117,20 +117,23 @@ def _coverage_branch(coverage_mod, max_age_days: int, symbols, facts) -> Branch:
 
 
 def _liveness_branch(liveness_mod, max_age_days: int, facts) -> Branch:
-    """执行层：run 卡住或数据停了 ⇒ blocked。"""
+    """执行层：run 卡住或数据停了 ⇒ blocked；只是「还没到下一拍」⇒ 降级但要说明。"""
     verdicts = liveness_mod.judge(facts, today=date.today(), max_age_days=max_age_days)
     if not verdicts:
         raise ValueError("没有 RUNNING/STARTING 的 run（判不出，不是可交易）")
     hits = [v for v in verdicts if v.counts]
     und = [v for v in verdicts if v.state == "undetermined"]
+    waiting = [v for v in verdicts if v.state == "runner_waiting"]
     if hits:
         return Branch("执行（run 是否在推进）", BLOCKED, len(hits),
                       [f"{v.run_id} {v.strategy} [{v.state}] {v.detail}" for v in hits])
     if und and len(und) == len(verdicts):
         raise ValueError("全部 run 都判不出（取不到 run 的标的或行情源）")
-    if und:
+    # 「等下一拍」不是命中，但**必须打出来**：否则结论 tradable 而原因藏在别处，
+    # 读的人会以为这一层没被看过（同族于「成功不说话＝核过也对与压根没核逐字相同」）。
+    if und or waiting:
         return Branch("执行（run 是否在推进）", DEGRADED, 0,
-                      [f"{v.run_id} [undetermined] {v.detail}" for v in und])
+                      [f"{v.run_id} [{v.state}] {v.detail}" for v in [*und, *waiting]])
     return Branch("执行（run 是否在推进）", TRADABLE, 0, [])
 
 

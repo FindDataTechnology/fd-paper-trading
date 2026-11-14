@@ -122,3 +122,48 @@ def test_inject_on_an_unknown_target_says_so():
 
 def test_self_test_passes():
     assert gate._self_test() == 0
+
+
+# ---------------------------------------------------------------- 「等下一拍」≠「卡住」
+#
+# 2026-11-14 实测：备源把 600000 的缺口日补进来之后 21 分钟，这道闸判 runner_lag
+# 「重启 runner 能修」，而轮询周期是 1800s、下一次认领在 9 分钟后——它自己就走了
+# （last_bar_date 11-09→11-13）。照旧判据去重启一个健康进程是纯风险动作。
+# 认领时刻由租约反推：lease_until = 认领时刻 + 3×poll（runner.py:_claim_lease）。
+
+POLL = 1800.0
+
+
+def _lagging(claim_age, poll=POLL):
+    return gate.RunFact("b2", "stuck", "600000", "2026-11-09", "2026-11-13",
+                        claim_age_seconds=claim_age, poll_seconds=poll)
+
+
+def test_newer_bars_within_the_poll_window_is_waiting_not_lag():
+    (v,) = gate.judge([_lagging(300.0)], today=TODAY, max_age_days=4)
+    assert v.state == "runner_waiting"
+    assert not v.counts, "等一拍不是命中——它会让整条结论变 blocked"
+    assert "下一拍" in v.detail and "不必重启" in v.detail
+
+
+def test_newer_bars_after_a_full_poll_window_is_lag():
+    (v,) = gate.judge([_lagging(POLL + 600)], today=TODAY, max_age_days=4)
+    assert v.state == "runner_lag" and v.counts
+    assert "已过了一个完整轮询周期" in v.detail
+
+
+def test_exactly_at_the_window_boundary_is_already_lag():
+    """`wait > 0` 才算等：正好到点（wait==0）时那一拍该来了而没来。"""
+    (v,) = gate.judge([_lagging(POLL)], today=TODAY, max_age_days=4)
+    assert v.state == "runner_lag"
+
+
+def test_missing_claim_age_falls_back_to_lag():
+    """拿不到认领时刻/周期 ⇒ 保守报卡住，不许把「判不出」读成「在等」。"""
+    (v,) = gate.judge([_lagging(None)], today=TODAY, max_age_days=4)
+    assert v.state == "runner_lag" and v.counts
+
+
+def test_tick_due_in_arithmetic():
+    assert gate._tick_due_in(_lagging(300.0)) == POLL - 300.0
+    assert gate._tick_due_in(gate.RunFact("x", "s", "600000", "a", "b")) is None

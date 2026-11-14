@@ -119,3 +119,24 @@ def test_coverage_branch_downgrades_but_does_not_block_on_declared_gap():
 
     b = gate._coverage_branch(FakeCoverage, 4, {}, [])
     assert b.severity == gate.DEGRADED and b.hits == 0
+
+
+def test_liveness_branch_degrades_but_states_why_when_a_tick_is_pending():
+    """「还没到下一拍」不是命中，但也不许静默读成 tradable——原因必须出现在行里。"""
+    class FakeLiveness:
+        class Verdict:
+            def __init__(self, state):
+                self.run_id, self.strategy, self.state = "r1", "s", state
+                self.detail = "下一拍约 9 分钟后"
+
+            @property
+            def counts(self):
+                return self.state in ("runner_lag", "data_stalled")
+
+        @staticmethod
+        def judge(facts, *, today, max_age_days):
+            return [FakeLiveness.Verdict("runner_waiting")]
+
+    b = gate._liveness_branch(FakeLiveness, 4, [])
+    assert b.severity == gate.DEGRADED and b.hits == 0
+    assert any("runner_waiting" in line and "下一拍" in line for line in b.lines)
