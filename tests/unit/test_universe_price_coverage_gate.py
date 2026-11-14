@@ -51,6 +51,34 @@ def test_fresh_quote_is_green():
     assert v.state == "ok" and not v.counts
 
 
+def test_default_threshold_is_the_trading_threshold():
+    """闸问的是「现在能不能下单」，所以缺省阈值必须等于交易侧 `stale_quote` 那个数。
+
+    两处各写一个数字迟早漂移，而漂移的方向恰好是「闸报绿、下单门拒单」——
+    2026-11-14 就是这个形态：默认 8 天时 600000（最后一根 11-09）报 ok，
+    而 `_require_fresh_quote` 已经按 4 天拒它。
+    """
+    from fd_paper_trading.execution.service import MAX_QUOTE_AGE_SECONDS
+
+    assert gate.trading_max_age_days() == int(MAX_QUOTE_AGE_SECONDS // 86400) == 4
+
+
+def test_a_five_day_old_bar_is_stale_under_the_default():
+    """11-14 实况的具体标的一只：5 天前的那根 bar 必须计数，且 detail 指向下单门。"""
+    facts = [gate.SymbolFact("600000", quote=True, last_bar="2026-11-09")]
+    (v,) = gate.judge(facts, today=TODAY, max_age_days=gate.trading_max_age_days())
+    assert v.state == "stale" and v.counts
+    assert "stale_quote" in v.detail
+
+
+def test_holiday_safe_threshold_still_hides_that_gap():
+    """保留 8 天档是为了判「通道级断供」；它确实看不见 5 天——这是取舍，不是 bug。
+    把这条钉住，免得以后有人以为 8 天档也能当验收判据。"""
+    facts = [gate.SymbolFact("600000", quote=True, last_bar="2026-11-09")]
+    (v,) = gate.judge(facts, today=TODAY, max_age_days=8)
+    assert v.state == "ok"
+
+
 def test_old_bar_is_stale_and_counts():
     facts = [gate.SymbolFact("600036", quote=True, last_bar="2026-10-01")]
     (v,) = gate.judge(facts, today=TODAY, max_age_days=8)

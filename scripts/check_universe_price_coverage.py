@@ -14,12 +14,22 @@
 ## 判据（三档，只有前两档计数）
 
 1. `unpriceable` —— 拿不到报价。可能是通道不覆盖该类实体、也没有可读的价格族。
-2. `stale` —— 有报价，但最后一根 bar 太旧（默认 8 个自然日：4 个交易日 + 周末/
-   节假日余量；口径与交易侧 `stale_quote` 的 4 天阈值同源，放宽是为了不在正常
-   长周末假红）。
+2. `stale` —— 有报价，但最后一根 bar 已超过阈值（默认 = **交易侧那个阈值**，见下）。
 3. `declared_gap` —— 已知且已定性的缺口（见 `DECLARED_GAPS`）。**逐条打印、不计
    命中**——常年红的闸会被无视，而"场外基金只有净值"这种形态不会因为等得久就
    变好。每条必须写清解除条件。
+
+## 阈值为什么默认取交易侧那个
+
+这条闸问的是"**现在能不能下单**"。交易侧的 `stale_quote` 用的是
+`execution.service.MAX_QUOTE_AGE_SECONDS`（4 天），且**没有任何节假日宽限**——周五
+收盘价在周二就是"4 天前"，照样拒单。所以闸若用更松的阈值（例如 8 天），会在
+**已经下不了单的那几天里报绿**：2026-11-14 实况就是 600000 的最后一根 bar 在
+11-09（5.9 天），下单门拒它、而这条闸报 ok。
+
+第一版默认 8 天，理由是"别在长周末假红"。那是个真实的取舍，但**取舍要有名字**：
+`--max-age-days 8` 保留下来，用于判"通道级断供"（数据管线是不是整体停了）；
+默认值与交易侧同源，并在 detail 里同时打印两个阈值。
 
 ## 退出码
 
@@ -49,6 +59,19 @@ from typing import Any, Iterable
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if os.path.join(REPO, "src") not in sys.path:
     sys.path.insert(0, os.path.join(REPO, "src"))
+
+#: 交易侧"报价太旧就拒单"的阈值（天）。**唯一来源是执行层那个常量**：
+#: 两处各写一个数字迟早漂移，而漂移的方向恰好是这条闸报绿、下单门拒单。
+#: 导入失败（脚本在没有 src 的环境里单独跑）退回同一个值，并由单测钉住相等。
+_FALLBACK_TRADING_MAX_AGE_DAYS = 4
+
+
+def trading_max_age_days() -> int:
+    try:
+        from fd_paper_trading.execution.service import MAX_QUOTE_AGE_SECONDS
+    except Exception:  # noqa: BLE001 - 沙箱里没有 src 时退回常量，单测会钉住一致
+        return _FALLBACK_TRADING_MAX_AGE_DAYS
+    return int(MAX_QUOTE_AGE_SECONDS // 86400)
 
 #: 已知且已定性的缺口：**不算命中**，但每次都打印。
 #:
@@ -159,7 +182,8 @@ def judge(facts: Iterable[SymbolFact], *, today: date, max_age_days: int,
         if f.quote and stale:
             verdicts.append(Verdict(
                 f.symbol, "stale",
-                f"有报价但最后一根 bar 是 {f.last_bar}（{age} 天 > {max_age_days}）", age,
+                f"有报价但最后一根 bar 是 {f.last_bar}（{age} 天 > {max_age_days}）；"
+                f"交易侧阈值 {trading_max_age_days()} 天 ⇒ 下单会被拒（stale_quote）", age,
             ))
         else:
             verdicts.append(Verdict(
@@ -273,7 +297,8 @@ def _self_test() -> int:
 
 # ---------------------------------------------------------------- main
 
-def _print_human(verdicts: list[Verdict], symbols: dict[str, list[str]]) -> None:
+def _print_human(verdicts: list[Verdict], symbols: dict[str, list[str]],
+                 max_age_days: int | None = None) -> None:
     marks = {"ok": "✓", "stale": "✗", "unpriceable": "✗",
              "declared_gap": "·", "out_of_scope": "·"}
     for v in verdicts:
@@ -283,7 +308,9 @@ def _print_human(verdicts: list[Verdict], symbols: dict[str, list[str]]) -> None
     counted = [v for v in verdicts if v.counts]
     declared = [v for v in verdicts if v.state == "declared_gap"]
     print(
-        f"\n共 {len(verdicts)} 个标的：ok={sum(v.state == 'ok' for v in verdicts)} "
+        f"\n共 {len(verdicts)} 个标的（stale 阈值 {max_age_days} 天"
+        f"{'，= 交易侧 stale_quote' if max_age_days == trading_max_age_days() else '，命令行指定'}）："
+        f"ok={sum(v.state == 'ok' for v in verdicts)} "
         f"stale={sum(v.state == 'stale' for v in verdicts)} "
         f"unpriceable={sum(v.state == 'unpriceable' for v in verdicts)} "
         f"declared_gap={len(declared)} "
@@ -292,7 +319,7 @@ def _print_human(verdicts: list[Verdict], symbols: dict[str, list[str]]) -> None
     )
 
 
-async def _amain(args: argparse.Namespace) -> int:
+async def _amain(args: argparse.Namespace, *, max_age_days: int) -> int:
     override = [s for s in (args.symbols or "").split(",") if s.strip()] or None
     try:
         symbols = await _load_strategy_symbols(override)
@@ -301,7 +328,7 @@ async def _amain(args: argparse.Namespace) -> int:
         print(f"判不出（EXIT=2）：{type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
 
-    verdicts = judge(facts, today=date.today(), max_age_days=args.max_age_days)
+    verdicts = judge(facts, today=date.today(), max_age_days=max_age_days)
     if args.json:
         print(json.dumps({
             "symbols": len(verdicts),
@@ -309,15 +336,17 @@ async def _amain(args: argparse.Namespace) -> int:
             "counted": sum(v.counts for v in verdicts),
         }, ensure_ascii=False, indent=2))
     else:
-        _print_human(verdicts, symbols)
+        _print_human(verdicts, symbols, max_age_days)
     return 1 if any(v.counts for v in verdicts) else 0
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--symbols", help="只判这些标的（逗号分隔），跳过策略表")
-    ap.add_argument("--max-age-days", type=int, default=8,
-                    help="最后一根 bar 超过多少自然日算 stale（默认 8）")
+    ap.add_argument("--max-age-days", type=int, default=None,
+                    help="最后一根 bar 超过多少自然日算 stale；缺省 = 交易侧 "
+                         "stale_quote 的阈值（4 天，无节假日宽限）。判通道级断供时"
+                         "可放宽到 8")
     ap.add_argument("--lookback-days", type=int, default=40,
                     help="取数窗口（默认 40 天，够覆盖长假）")
     ap.add_argument("--json", action="store_true", help="机器可读输出")
@@ -326,7 +355,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.self_test:
         return _self_test()
-    return asyncio.run(_amain(args))
+    max_age_days = args.max_age_days if args.max_age_days is not None else trading_max_age_days()
+    return asyncio.run(_amain(args, max_age_days=max_age_days))
 
 
 if __name__ == "__main__":
