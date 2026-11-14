@@ -37,4 +37,4 @@
 - [x] 6.2 `openspec validate 2026-11-14-day-scoped-daily-pnl --strict`
 - [x] 6.3 归档并核对 `Totals`：`daily-pnl-tracking` ~3（实测 `+ 0, ~ 3, - 0, → 0`）
 - [x] 6.4 归档后 `openspec validate daily-pnl-tracking --type spec --strict`（valid）
-- [ ] 6.5 提交推送；报告补附五十九
+- [x] 6.5 提交推送（`04138dd`，CI/image 双绿）；报告补附五十九（滚版当天另记附六十：镜像源 401 让 Argo 全线失明、个股日线停在 11-09）；生产实测：库头 c3e5a7b9d1f2、列可空、端点 200、镜像内 bundle 含新前端
