@@ -619,3 +619,172 @@ async def test_watermark_prefers_the_registry_when_it_answers(monkeypatch):
     got = await p.source_watermark()
     assert got["status"] == "ok"
     assert got["method"] == "reference_basket"   # 不是 provider_max_date
+
+
+# ---- 基金族（change: fund-price-channel）----
+#
+# 2026-11-14 实况：``510300`` 的日线一直在库里（概念 383-388、``source_used='akshare'``、
+# ``entity_type='fund'``、水位 2026-11-13），而纸面交易永远拿不到报价——因为解析写死
+# ``entity_type in ('stock','index')`` 且源钉死 ``astock_daily``。
+# 下面这组判据钉的是"数据在库里 → 交易面真能读到"，以及"族没声明时**不许**借源"。
+
+FUND_CONCEPTS = [
+    {"id": 383, "code": "price.open", "verified": True},
+    {"id": 384, "code": "price.close", "verified": True},
+    {"id": 385, "code": "price.high", "verified": True},
+    {"id": 386, "code": "price.low", "verified": True},
+    {"id": 387, "code": "price.volume", "verified": True},
+]
+
+FUND_ENTITY_ID = 67   # 生产库里 510300 的实体 id
+
+
+class FundReader(FakeReader):
+    """个股与基金两族同库：探测与取数都按 ``source_used`` 分辨归属。"""
+
+    def __init__(self, fund_bars=None, fund_has_rows=True, **kw):
+        super().__init__(**kw)
+        self.fund_bars = fund_bars if fund_bars is not None else [
+            _bar_row("2026-11-11", 4.151, 4.16, 4.14, 4.151),
+            _bar_row("2026-11-12", 4.12, 4.13, 4.11, 4.12),
+            _bar_row("2026-11-13", 4.083, 4.09, 4.07, 4.083),
+        ]
+        self.fund_has_rows = fund_has_rows
+        self.entities["510300"] = [{"id": FUND_ENTITY_ID, "entity_type": "fund"}]
+
+    async def __call__(self, sql, *args):
+        s = " ".join(sql.split())
+        if s.startswith("select id, code, verified from concepts"):
+            self.calls.append((sql, args))
+            return FUND_CONCEPTS if args[0] == "fund" else STOCK_CONCEPTS
+        if s.startswith("select 1 as x from semantic_observations_all"):
+            self.calls.append((sql, args))
+            eid, db_source = args[0], args[2]
+            if eid == FUND_ENTITY_ID:
+                return [{"x": 1}] if (self.fund_has_rows and db_source == "akshare") else []
+            return ([{"x": 1}]
+                    if (eid in self.entities_with_data and db_source == "astock_daily")
+                    else [])
+        if s.startswith("select date, max(case when concept_id"):
+            self.calls.append((sql, args))
+            return list(self.fund_bars) if args[5] == FUND_ENTITY_ID else list(self.bars)
+        return await super().__call__(sql, *args)
+
+
+class _FundDecl:
+    """基金源声明替身：只带 provider 用到的字段。
+
+    为什么不读真 yaml：provider 的判据证的是**决策逻辑**（按族取源、pinned 优先、
+    族未声明即 gap），而"发行包里那份 declarations.yaml 有没有基金族"是另一件事，
+    由 fd-open-data-mcp 自己的注册表测试证。混在一起会让本仓测试随**依赖版本**
+    红绿——2026-11-14 实测：本地 venv 装的是 0.5.60，红了两条，而代码是对的。
+    """
+
+    source_id = "fund_akshare"
+    db_source = "akshare"
+    adjustment = "none"
+    adjustment_anchor = None
+    instrument_types = ("fund",)
+
+
+@pytest.fixture
+def fund_family(monkeypatch):
+    """把基金族声明注入注册表出口（与 watermark 测试同一手法）。"""
+    import fd_open_data_mcp.price_sources as ps
+
+    real = ps.resolve_for_family
+
+    def _resolve(family, **kw):
+        if family == "price.fund.daily":
+            return _FundDecl()
+        return real(family, **kw)
+
+    monkeypatch.setattr(ps, "resolve_for_family", _resolve)
+    return _FundDecl
+
+
+def _fund_provider(reader=None, **kw):
+    kw.setdefault("source", "astock_daily")
+    kw.setdefault("registry_source_id", "astock_daily")
+    return AstockMarketDataProvider(fetcher=reader or FundReader(), **kw)
+
+
+@pytest.mark.asyncio
+async def test_fund_symbol_resolves_through_the_fund_family(fund_family):
+    """基金经自己的价格族解析出 bar，且取数落在基金族的物理源上。"""
+    reader = FundReader()
+    p = _fund_provider(reader)
+    bars = await p.get_daily_bars("510300", "2026-11-11", "2026-11-13")
+    assert [b.close for b in bars] == [
+        Decimal("4.151"), Decimal("4.12"), Decimal("4.083"),
+    ]
+    queries = reader.sql_for("select date, max(case when concept_id")
+    assert len(queries) == 1
+    assert queries[0][1][7] == "akshare"        # 参数 8 = source_used
+    assert queries[0][1][5] == FUND_ENTITY_ID   # 解析到的是 fund 实体
+
+
+@pytest.mark.asyncio
+async def test_stock_still_reads_the_pinned_source_after_fund_support():
+    """回归：基金族上线不得把个股读数带偏（个股仍由 pinned 源管辖）。"""
+    rows = [_bar_row("2026-11-13", 10, 11, 9, 10.5)]
+    reader = FundReader(bars=rows)
+    p = _fund_provider(reader)
+    bars = await p.get_daily_bars("600036", "2026-11-13", "2026-11-13")
+    assert [b.close for b in bars] == [Decimal("10.5")]
+    queries = reader.sql_for("select date, max(case when concept_id")
+    assert queries[0][1][7] == "astock_daily"
+
+
+@pytest.mark.asyncio
+async def test_undeclared_fund_family_is_a_gap_and_never_borrows_the_stock_source(
+    monkeypatch,
+):
+    """红证：族未声明 ⇒ gap，且**一次都不许**拿个股源去探/读基金。
+
+    这条防的是"数据驱动回落"：如果实现写成"先试 pinned 源、没行再换源"，
+    个股在某个源没行时就会悄悄换口径，而那种错误不会红。
+    """
+    import fd_open_data_mcp.price_sources as ps
+    from fd_open_data_mcp.price_sources import FamilyNotClaimed
+
+    def _boom(family):
+        raise FamilyNotClaimed(family, [])
+
+    monkeypatch.setattr(ps, "resolve_for_family", _boom)
+
+    reader = FundReader()
+    p = _fund_provider(reader)
+    out = await p.get_bars_with_coverage("510300", "2026-11-11", "2026-11-13")
+
+    assert out["bars"] == []
+    assert out["adjusted"] == "unknown"          # 不替声明说话
+    assert out["missing"] == [{"start": "2026-11-11", "end": "2026-11-13"}]
+    # 既没探测、也没取数：基金族不可读就是不可读
+    assert reader.sql_for("select 1 as x") == []
+    assert reader.sql_for("select date, max(case when concept_id") == []
+
+
+@pytest.mark.asyncio
+async def test_fund_with_no_rows_in_its_family_is_a_gap(fund_family):
+    """有实体无行 ⇒ gap（不合成报价、不换族）。"""
+    reader = FundReader(fund_has_rows=False)
+    p = _fund_provider(reader)
+    out = await p.get_bars_with_coverage("510300", "2026-11-11", "2026-11-13")
+    assert out["bars"] == []
+    assert out["missing"]
+    assert reader.sql_for("select date, max(case when concept_id") == []
+
+
+@pytest.mark.asyncio
+async def test_coverage_reports_the_fund_caliber_not_the_stock_one(fund_family):
+    """基金报 `none`/`akshare`，不借个股的 `qfq`/`astock_daily`。"""
+    reader = FundReader()
+    p = _fund_provider(reader)
+    out = await p.get_bars_with_coverage("510300", "2026-11-11", "2026-11-13")
+    assert out["adjusted"] == "none"
+    assert out["source"] == "akshare"
+    ref = out["series_ref"]
+    assert ref["source_id"] == "fund_akshare"
+    assert ref["db_source"] == "akshare"
+    assert ref["adjustment"] == "none"

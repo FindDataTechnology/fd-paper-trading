@@ -40,6 +40,7 @@ import asyncio
 import logging
 import math
 import re
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -71,6 +72,24 @@ _CONCEPT_SPECS: tuple[tuple[str, str], ...] = (
 # 6/9/5-prefixed codes trade on the Shanghai exchange; the rest on Shenzhen.
 _XSHG_PREFIXES = ("6", "9", "5")
 
+#: 实体类型 → 价格概念族。注册表为每个族声明**唯一首选源**（D7），
+#: 所以"这个实体类型的行该去哪个 ``source_used`` 读"不是 provider 的常量，
+#: 而是声明文件里的一行。
+#:
+#: 这张表只表达**本体事实**（哪个实体类型属于哪个价格族），不表达配置——
+#: 换源仍然只改 YAML。
+_ENTITY_FAMILY: dict[str, str] = {
+    "stock": "price.stock.daily",
+    "index": "price.index.daily",
+    "fund": "price.fund.daily",
+}
+
+#: 本 provider 认的实体类型。``fund`` 是 2026-11-14 加进来的（fund-price-channel）：
+#: 场内 ETF/LOF 的日线一直在库里（concept 383-388、``source_used='akshare'``、
+#: entity_type='fund'），而此前解析写死 stock/index ⇒ 有价也永远 ``no_quote``。
+#: 加它不改变个股读数：个股仍由 pinned 源管辖（见 ``_family_source``）。
+_ENTITY_TYPES: tuple[str, ...] = ("stock", "index", "fund")
+
 _SYMBOL_RE = re.compile(r"^(?P<code>\d{6})(?:\.(?P<venue>SH|SS|SZ|SHE))?$", re.I)
 
 #: 声明拿不到时**报什么**。
@@ -92,6 +111,26 @@ _UNKNOWN_ADJUSTMENT = "unknown"
 # ``marketdata.selection``, so the provider no longer holds a copy of a source
 # name. A provider constructed without a source is a programming error, not a
 # default (add-price-supply-and-caliber task 3.3).
+
+
+@dataclass(frozen=True)
+class _FamilySource:
+    """某个实体类型该读的源：注册表身份、库里的 ``source_used``、以及它的声明。
+
+    三者不能揉成一个字符串：``source_id`` 是数据身份（注册表 key、写进序列引用），
+    ``db_source`` 是联邦视图里 ``source_used`` 的物理取值（口径变体或跨族共库时两者
+    不同），``declaration`` 是口径/锚点/许可的唯一真源。把它们分开，才可能在
+    「基金与个股共用物理 source_used 但口径不同」时各自报对。
+    """
+
+    source_id: str | None
+    db_source: str
+    declaration: object | None
+
+    @property
+    def adjustment(self) -> str | None:
+        declared = getattr(self.declaration, "adjustment", None)
+        return str(declared) if declared else None
 
 # Trading-calendar probe: a small basket of dense, full-history blue chips in
 # the SAME pinned source. A market-wide calendar scan over the federated view
@@ -173,6 +212,8 @@ class AstockMarketDataProvider(MarketDataProvider):
         # entity_type → {field: concept_id}; a family without price.close
         # resolves to {} (callers then report a gap, they never substitute).
         self._concepts_by_type: dict[str, dict[str, int]] = {}
+        # entity_type → _FamilySource | None（None = 该族不可读，fail-closed）。
+        self._family_sources: dict[str, _FamilySource | None] = {}
         # symbol code → (entity_id, entity_type) | -1 sentinel (unresolved).
         self._entity_cache: dict[str, tuple[int, str]] = {}
         self._ref_ids: list[int] | None = None
@@ -249,11 +290,14 @@ class AstockMarketDataProvider(MarketDataProvider):
         close_id = concepts.get("close")
         if close_id is None:
             return None
+        src = self._family_source(etype)
+        if src is None:
+            return None
         rows = await self._fetch(
             "select max(date) as d from semantic_observations_all "
             "where entity_id = $1 and concept_id = $2 and granularity = 'day' "
             "and source_used = $3",
-            eid, close_id, self._source,
+            eid, close_id, src.db_source,
         )
         if not rows:
             return None
@@ -294,9 +338,73 @@ class AstockMarketDataProvider(MarketDataProvider):
             self._decl = None
         return self._decl
 
+    # ---- 按实体类型解析族与源（fund-price-channel）----
+
+    def _pinned_instrument_types(self) -> tuple[str, ...]:
+        """pinned 源在其声明里**声明覆盖**的实体类型。
+
+        取不到声明时按**最窄**的假设走（只认个股）。方向很重要：把"不知道它认什么"
+        当成"它什么都认"，会让基金行悄悄落到个股源上去比——那是错的那一侧。
+        """
+        decl = self._declaration()
+        types = getattr(decl, "instrument_types", None) if decl is not None else None
+        return tuple(types) if types else ("stock",)
+
+    def _family_source(self, entity_type: str) -> "_FamilySource | None":
+        """该实体类型该读哪个源；``None`` = 这个族不可读（fail-closed）。
+
+        规则（design D1/D2/D3）：
+
+        1. pinned 源若在声明里覆盖该实体类型 ⇒ 用 pinned（swap-source 语义不变，
+           个股读数与本次改动前逐位一致）。
+        2. 否则按 ``entity_type → 价格族 → 注册表首选源`` 解析，用声明的 ``db_source``。
+        3. 族**未声明** ⇒ 返回 ``None``：调用方报 data gap，**绝不**退回 pinned 源去
+           "试试看"——数据驱动的回落会在"个股在某源没行"时悄悄换源，而换源等于换口径。
+        """
+        if entity_type in self._family_sources:
+            return self._family_sources[entity_type]
+
+        resolved: _FamilySource | None
+        if entity_type in self._pinned_instrument_types():
+            resolved = _FamilySource(
+                source_id=self._registry_source_id,
+                db_source=self._source,
+                declaration=self._declaration(),
+            )
+        else:
+            resolved = self._registry_family_source(entity_type)
+        self._family_sources[entity_type] = resolved
+        return resolved
+
+    def _registry_family_source(self, entity_type: str) -> "_FamilySource | None":
+        family = _ENTITY_FAMILY.get(entity_type)
+        if family is None:
+            logger.warning(
+                "astock provider: entity_type=%s has no price family mapping",
+                entity_type,
+            )
+            return None
+        try:
+            from fd_open_data_mcp.price_sources import (  # type: ignore[import-not-found]
+                resolve_for_family,
+            )
+
+            decl = resolve_for_family(family)
+        except Exception as exc:  # noqa: BLE001 - 族未声明/包不在：这是 gap，不是可回落
+            logger.warning(
+                "astock provider: price family %s unresolved for entity_type=%s (%s); "
+                "reporting a gap instead of borrowing another family's source",
+                family, entity_type, exc,
+            )
+            return None
+        return _FamilySource(
+            source_id=getattr(decl, "source_id", None),
+            db_source=getattr(decl, "db_source", None) or getattr(decl, "source_id", ""),
+            declaration=decl,
+        )
+
     def _declared_adjustment(self) -> str | None:
         """声明的复权口径；**取不到就是 None**，不拿模块常量顶替。
-
         返回 None 的两种情形（都属"无法确定"）：没有注册表 id（直接构造），
         或注册表/声明读取失败。调用方据此报 ``unknown``（见 `_UNKNOWN_ADJUSTMENT`），
         而不是断言一个值。
@@ -319,11 +427,18 @@ class AstockMarketDataProvider(MarketDataProvider):
             return None
         from .series_ref import build_series_ref
 
-        decl = self._declaration()
+        # 源身份必须与"这串 bar 是从哪读出来的"一致：基金行读了 ``akshare`` 却报
+        # ``astock_daily`` 的 ref，就是把口径认错。实体类型从解析缓存取（bar 是刚
+        # 从一次取数里出来的，缓存必已填好）；取不到时用 pinned——那是唯一可报的，
+        # 且 ``adjusted`` 仍按 pinned 声明，不自造。
+        etype = self._entity_type_of(symbol)
+        src = self._family_source(etype) if etype else None
+        decl = src.declaration if src is not None else self._declaration()
         adjusted = getattr(decl, "adjustment", None) if decl is not None else None
         dates = sorted(datetime.fromtimestamp(b.ts, tz=timezone.utc).date() for b in bars)
         ref, _reason = build_series_ref(
-            source_id=self._registry_source_id,
+            source_id=(src.source_id if src is not None
+                       else self._registry_source_id),
             symbol=symbol,
             adjusted=adjusted,
             as_of_max=dates[-1].isoformat(),
@@ -332,10 +447,21 @@ class AstockMarketDataProvider(MarketDataProvider):
             row_count=len(bars),
             adjustment_anchor=(getattr(decl, "adjustment_anchor", None)
                                if decl is not None else None),
-            db_source=(getattr(decl, "db_source", None) if decl is not None
-                       else self._source),
+            db_source=(src.db_source if src is not None
+                       else (getattr(decl, "db_source", None) if decl is not None
+                             else self._source)),
         )
         return ref
+
+    def _entity_type_of(self, symbol: str) -> str | None:
+        """已解析过的符号的实体类型（未解析/解析不出 ⇒ None）。"""
+        norm = normalize_symbol(symbol)
+        if norm is None:
+            return None
+        cached = self._entity_cache.get(norm[0])
+        if not cached or cached[0] == -1:
+            return None
+        return cached[1]
 
     # ---- concepts / entity resolution ----
     async def _concepts(self, entity_type: str) -> dict[str, int]:
@@ -381,12 +507,17 @@ class AstockMarketDataProvider(MarketDataProvider):
 
         Preference: the STOCK entity for this code, then the INDEX entity
         (benchmark codes like 000300; 000905 collides with a stock, and the
-        collision is resolved by data existence in the pinned source). A
-        candidate is taken when it has rows in the pinned family; a stock
-        that never traded there falls through to the index, and an index with
-        no rows yet leaves the symbol unresolved (a gap downstream, reported
-        as such — never a substitution). Cached per instance: rows only grow,
-        so a cached resolution never becomes wrong in the unsafe direction.
+        collision is resolved by data existence in the pinned source), then the
+        FUND entity (exchange-traded ETFs/LOFs; ``510300`` is a fund and has no
+        stock entity, so without this branch it is unresolvable no matter how
+        much data the fund family holds). A candidate is taken when it has rows
+        **in its own family's source** — probing a fund candidate against the
+        stock source would reject every fund in the store.
+
+        A stock that never traded falls through to the index, and an index with
+        no rows yet leaves the symbol unresolved (a gap downstream, reported as
+        such — never a substitution). Cached per instance: rows only grow, so a
+        cached resolution never becomes wrong in the unsafe direction.
         """
         norm = normalize_symbol(symbol)
         if norm is None:
@@ -398,10 +529,12 @@ class AstockMarketDataProvider(MarketDataProvider):
 
         rows = await self._fetch(
             "select id, entity_type from entities "
-            "where code = $1 and entity_type in ('stock', 'index') "
-            "order by case when entity_type = 'stock' then 0 else 1 end, id asc "
-            "limit 4",
+            "where code = $1 and entity_type = any($2::text[]) "
+            "order by case entity_type when 'stock' then 0 "
+            "when 'index' then 1 else 2 end, id asc "
+            "limit 6",
             code,
+            list(_ENTITY_TYPES),
         )
         chosen: tuple[int, str] | None = None
         for r in rows:
@@ -411,11 +544,16 @@ class AstockMarketDataProvider(MarketDataProvider):
                 # A family we cannot locate in the store cannot be probed;
                 # skip the candidate rather than trust it.
                 continue
+            src = self._family_source(etype)
+            if src is None:
+                # 族没有可读的源（未声明）：这个候选证明不了自己有数据，
+                # 跳过——**不**拿别的族的源去探测它。
+                continue
             has = await self._fetch(
                 "select 1 as x from semantic_observations_all "
                 "where entity_id = $1 and concept_id = $2 "
                 "and granularity = 'day' and source_used = $3 limit 1",
-                int(r["id"]), close_id, self._source,
+                int(r["id"]), close_id, src.db_source,
             )
             if has:
                 chosen = (int(r["id"]), etype)
@@ -445,6 +583,9 @@ class AstockMarketDataProvider(MarketDataProvider):
         start_s, end_s = _date_str(start), _date_str(end)
         if start_s > end_s:
             start_s, end_s = end_s, start_s
+        # 空序列也要报**它本该读哪个源**：基金与个股的源不同，报错一个会让人去查错的源。
+        # 实体解析不出来时退回 pinned 源（那是"没解析出来"这一情形下唯一能报的东西），
+        # 口径仍然报 unknown（不替声明说话）。
         empty_gap = {
             "bars": [], "closes": [],
             "missing": [{"start": start_s, "end": end_s}],
@@ -457,6 +598,11 @@ class AstockMarketDataProvider(MarketDataProvider):
         entity = await self._resolve_entity(symbol)
         if entity is None:
             return empty_gap
+        etype = entity[1]
+        family_src = self._family_source(etype)
+        if family_src is None:
+            return empty_gap
+        empty_gap["source"] = family_src.db_source
         fetched = await self._query_bars(symbol, start_s, end_s, entity=entity)
         bars, close_series = fetched["bars"], fetched["close_series"]
         observed = [d for d, _ in close_series]
@@ -522,17 +668,19 @@ class AstockMarketDataProvider(MarketDataProvider):
             "market_closed": market_closed,
             "fill_failed": fill_failed,
             "fingerprint": _fingerprint(close_series),
-            # 口径以声明为真源；取不到就报 `unknown`（**不**退回 provider 侧别名）。
-            # 两者若各说各话，run.params["adjusted"] 与 price_series_ref.adjustment
-            # 会互相矛盾，而下游没法判断该信哪个。
-            "adjusted": self._declared_adjustment() or _UNKNOWN_ADJUSTMENT,
-            "source": self._source,
+            # 口径以**该实体类型所属源**的声明为真源；取不到就报 `unknown`
+            # （**不**退回 provider 侧别名）。基金若沿用个股声明，就会把"不复权"
+            # 报成 `qfq`——替声明说话，且下游没法判断该信哪个。
+            "adjusted": (family_src.adjustment or _UNKNOWN_ADJUSTMENT),
+            "source": family_src.db_source,
         }
-        out.update(self._series_ref_facts(symbol, close_series, start_s, end_s))
+        out.update(self._series_ref_facts(
+            symbol, close_series, start_s, end_s, source=family_src,
+        ))
         return out
 
     def _series_ref_facts(self, symbol: str, close_series, start_s: str,
-                          end_s: str) -> dict:
+                          end_s: str, source: "_FamilySource | None" = None) -> dict:
         """附上 `PriceSeriesRef` 或"为什么没有"（change1 task 4.3）。
 
         口径与锚点取自声明（唯一真源）；``as_of_max`` 取本窗口内最后一个交易日，
@@ -543,12 +691,15 @@ class AstockMarketDataProvider(MarketDataProvider):
         """
         from .series_ref import build_series_ref
 
-        decl = self._declaration()
+        # 口径/锚点/源身份一律取**该实体类型所属源**的声明；``source=None``
+        # （直接构造、未经过族解析）时退回 pinned 声明——那是唯一还能报的东西。
+        decl = source.declaration if source is not None else self._declaration()
         # 未声明 ⇒ 传 None：`build_series_ref` 会以 `caliber_unknown` 拒绝出 ref。
         # 传 "forward" 则会被 `caliber_for()` 映射成 `qfq`——那等于替声明说话。
         adjusted = getattr(decl, "adjustment", None) if decl is not None else None
         ref, reason = build_series_ref(
-            source_id=self._registry_source_id,
+            source_id=(source.source_id if source is not None
+                       else self._registry_source_id),
             symbol=symbol,
             adjusted=adjusted,
             # close_series 按日期升序，最后一个就是窗口内的水位
@@ -558,21 +709,26 @@ class AstockMarketDataProvider(MarketDataProvider):
             row_count=len(close_series),
             adjustment_anchor=(getattr(decl, "adjustment_anchor", None)
                                if decl is not None else None),
-            db_source=(getattr(decl, "db_source", None) if decl is not None
-                       else self._source),
+            db_source=(source.db_source if source is not None
+                       else (getattr(decl, "db_source", None) if decl is not None
+                             else self._source)),
         )
         if ref is not None:
             return {"series_ref": ref}
         return {"series_ref_unavailable": reason}
 
     async def _query_bars(self, symbol: str, start_s: str, end_s: str, entity=None):
-        """One pivot SQL per window: date-asc OHLCV bars from the pinned source."""
+        """One pivot SQL per window: date-asc OHLCV bars from the family's source."""
         entity = entity if entity is not None else await self._resolve_entity(symbol)
         if entity is None:
             return {"bars": [], "close_series": []}
         eid, etype = entity
         concepts = await self._concepts(etype)
         if "close" not in concepts:
+            return {"bars": [], "close_series": []}
+        src = self._family_source(etype)
+        if src is None:
+            # 族没有可读的源：空序列（gap）。不拿别的族的源顶上。
             return {"bars": [], "close_series": []}
         close_id = concepts["close"]
         open_id = concepts.get("open", close_id)
@@ -593,7 +749,7 @@ class AstockMarketDataProvider(MarketDataProvider):
             "and date >= $9 and date <= $10 "
             "group by date order by date asc",
             open_id, high_id, low_id, close_id, vol_id or -1,
-            eid, ids, self._source,
+            eid, ids, src.db_source,
             start_s, end_s,
         )
         bars: list[Bar] = []
@@ -638,13 +794,16 @@ class AstockMarketDataProvider(MarketDataProvider):
         concepts = await self._concepts("stock")
         if "close" not in concepts:
             raise LookupError("calendar probe: stock price.close concept absent")
+        stock_src = self._family_source("stock")
+        if stock_src is None:
+            raise LookupError("calendar probe: stock family has no readable source")
         rows = await self._fetch(
             "select date, count(distinct entity_id) as n "
             "from semantic_observations_all "
             "where concept_id = $1 and granularity = 'day' and source_used = $2 "
             "and entity_id = any($3::bigint[]) and date = any($4::text[]) "
             "group by date",
-            concepts["close"], self._source, self._ref_ids, probe_dates,
+            concepts["close"], stock_src.db_source, self._ref_ids, probe_dates,
         )
         counts = {_as_date(r["date"]).isoformat(): int(r["n"]) for r in rows}
         if self._basket_ceiling is None:
@@ -652,7 +811,7 @@ class AstockMarketDataProvider(MarketDataProvider):
                 "select max(date) as m from semantic_observations_all "
                 "where concept_id = $1 and granularity = 'day' and source_used = $2 "
                 "and entity_id = any($3::bigint[])",
-                concepts["close"], self._source, self._ref_ids,
+                concepts["close"], stock_src.db_source, self._ref_ids,
             )
             self._basket_ceiling = (
                 _as_date(ceil_rows[0]["m"]).isoformat()
