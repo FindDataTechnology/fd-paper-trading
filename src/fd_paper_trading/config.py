@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     # Comma-separated emails promoted to admin on registration (design D7).
     fd_admin_emails: str = ""
 
+    # ---- Daily P&L ----
+    # 日度盈亏的日界（UTC 小时）。spec 要求"可配置，默认 00:00 UTC"。
+    # 只用整点不用分钟：全仓时间都是 UTC，引入"本地日界"会制造第二个时间口径。
+    pnl_day_start_utc_hour: int = 0
+
     # ---- Resting stop orders ----
     # How often the sweeper re-evaluates resting STOP/STOP_LIMIT orders of
     # accounts that no strategy run is driving. A stop's trigger point is "a new

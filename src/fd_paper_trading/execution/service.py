@@ -499,6 +499,9 @@ class PaperExecutionService:
                 side=side,
                 quantity=qty,
                 price=price,
+                # 这一笔自己实现的那部分（买入为 0）。落到成交行上，"今日已实现"
+                # 才是一条带 ts 的求和；持仓行那个累计值仍按原样维护，两者分工不变。
+                realized_pnl=realized,
             )
         )
         session.add(

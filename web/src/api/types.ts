@@ -81,6 +81,34 @@ export interface PositionOut {
   realized_pnl: string;
 }
 
+/** 一处无法计入的估值（服务端点名，前端只负责显示）。 */
+export interface DailyPnlGap {
+  symbol: string;
+  reason: "no_previous_close" | "no_quote" | string;
+}
+
+/**
+ * 账户日度盈亏：**服务端**算的三个数（spec: daily-pnl-tracking）。
+ *
+ * `baseline` 说明未实现用的是哪种基准（当前恒为 "previous_close"）；
+ * `gaps` 非空即这个数是"能算的都算了"，UI 必须显示为不完整——
+ * 前端不再自己按持仓行算，否则同一个账户在不同客户端会显示不同的日盈亏。
+ *
+ * `unattributed_fills` > 0 表示窗口内有成交从未记录过逐笔归属（本列上线前的历史
+ * 成交），此时 `realized_today` 只覆盖有归属的那部分：这是数据边界，不是估值缺口。
+ */
+export interface DailyPnlOut {
+  account_id: string;
+  as_of: string;
+  day_start: string;
+  baseline: string;
+  realized_today: string;
+  unrealized: string;
+  daily_pnl: string;
+  gaps: DailyPnlGap[];
+  unattributed_fills: number;
+}
+
 export interface InstrumentSearchResult {
   symbol: string;
   name: string;

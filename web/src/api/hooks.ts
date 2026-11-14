@@ -8,6 +8,7 @@ import type {
   InstrumentSearchResult,
   OrderCreate,
   OrderOut,
+  DailyPnlOut,
   PositionOut,
   StrategyCreate,
   StrategyOut,
@@ -24,6 +25,7 @@ export const qk = {
   accounts: ["accounts"] as const,
   account: (id: string) => ["account", id] as const,
   positions: (id: string) => ["positions", id] as const,
+  dailyPnl: (id: string) => ["daily-pnl", id] as const,
   orders: (accountId: string, status?: string) =>
     ["orders", accountId, status ?? "all"] as const,
   order: (id: string) => ["order", id] as const,
@@ -49,6 +51,15 @@ export function useAccountSummary(id: string | null) {
   return useQuery({
     queryKey: id ? qk.account(id) : ["account", "none"],
     queryFn: () => api.get<AccountSummary>(`/accounts/${id}`).then((r) => r.data),
+    enabled: !!id,
+  });
+}
+
+export function useDailyPnl(id: string | null) {
+  return useQuery({
+    queryKey: id ? qk.dailyPnl(id) : ["daily-pnl", "none"],
+    queryFn: () =>
+      api.get<DailyPnlOut>(`/accounts/${id}/daily-pnl`).then((r) => r.data),
     enabled: !!id,
   });
 }

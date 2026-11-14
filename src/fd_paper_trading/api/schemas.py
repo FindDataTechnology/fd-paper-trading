@@ -364,3 +364,33 @@ class UserGroupOut(BaseModel):
 
 class AssignUserGroup(BaseModel):
     group_id: uuid.UUID
+
+
+class DailyPnlGap(BaseModel):
+    """一处无法计入的估值：点名标的与原因，不静默拿别的价顶。"""
+
+    symbol: str
+    reason: str  # no_previous_close | no_quote
+
+
+class DailyPnlOut(BaseModel):
+    """账户日度盈亏（服务端口径，见 spec daily-pnl-tracking）。
+
+    ``baseline`` 说明未实现用的是哪种基准（当前恒为 ``previous_close``）；
+    ``gaps`` 非空即表示这个数是"能算的都算了"，UI 应显示为不完整。
+
+    ``unattributed_fills`` 是窗口内**从未记录过逐笔归属**的成交笔数
+    （``fills.realized_pnl IS NULL``：本列上线前的历史成交；回填要靠重放成本基础，
+    刻意不做）。它大于 0 时 ``realized_today`` 只覆盖"记录了归属"的那部分——这是
+    数据边界而非估值缺口，所以单独成字段而不混进 ``gaps``（``gaps`` 的元素是标的）。
+    """
+
+    account_id: uuid.UUID
+    as_of: datetime
+    day_start: datetime
+    baseline: str
+    realized_today: Decimal
+    unrealized: Decimal
+    daily_pnl: Decimal
+    gaps: list[DailyPnlGap]
+    unattributed_fills: int

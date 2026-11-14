@@ -269,6 +269,15 @@ class Fill(Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     price: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    #: 这一笔成交自己实现的那部分盈亏（卖出/减仓时非零，买入为 0）。
+    #: 与 ``Position.realized_pnl`` 的分工：那个是**终身**累计、供持仓视图；
+    #: 这个带 ``ts``，是"今日已实现"唯一能求和的来源。
+    #:
+    #: **可空**且 ``NULL`` 有语义：`NULL` = 这一笔从未记录过归属（本列上线之前的历史
+    #: 成交），`0` = 记录了、确实是零。两者不能混——把历史行填成 0 就等于声称"这笔
+    #: 保本平仓"，而它可能实现了一大笔。回填只能靠重放成本基础（第二套口径），刻意
+    #: 不做；端点改为统计窗口内的 ``NULL`` 笔数并如实报出（spec: 日界那条的末句）。
+    realized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
 
     order: Mapped["Order"] = relationship(back_populates="fills")
 

@@ -52,6 +52,7 @@ PAIRS = (
     ("InstrumentSearchResultOut", "InstrumentSearchResult"),
     ("StrategyOut", "StrategyOut"),
     ("StrategyRunOut", "StrategyRunOut"),
+    ("DailyPnlOut", "DailyPnlOut"),
 )
 
 
