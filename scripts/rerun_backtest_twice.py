@@ -85,7 +85,18 @@ async def _record(session_factory, run_id):
         }
 
 
-async def main() -> int:
+async def main(argv=None) -> int:
+    import argparse
+    from types import SimpleNamespace as NS
+
+    ap = argparse.ArgumentParser(description="同策略同参数跑两遍回测（6.2 取证）")
+    ap.add_argument("--strategy-id", default=None,
+                    help="直接指定策略 id：绕开「借最近一条 run 的参数」回落。"
+                         "批 6 实测：唯一有数据的单标的策略（600000）没有任何历史回测，"
+                         "回落只会挑到 weight 轨（universe 无数据，FAILED）")
+    ap.add_argument("--days", type=int, default=40, help="回测窗口长度（天）")
+    a = ap.parse_args(argv)
+
     engine = create_async_engine(os.environ["DATABASE_URL"])
     sf = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -111,10 +122,33 @@ async def main() -> int:
             spec = spec_by_sid.get(r.strategy_id) or {}
             sym = spec.get("symbol")
             return bool(sym) and str(sym).startswith("6")
-        src = next((r for r in rows if _single_symbol(r)), None) or (rows[0] if rows else None)
-        if src is None:
-            print("✗ 找不到可借参数的历史回测", file=sys.stderr)
-            return 2
+        if a.strategy_id:
+            st = await s.get(Strategy, uuid.UUID(a.strategy_id))
+            if st is None:
+                print(f"✗ --strategy-id {a.strategy_id} 不存在", file=sys.stderr)
+                return 2
+            # account 取任意已完成 run 的（回测只落账，不挑账户）。
+            # 2026-11-15 实测：库里此刻**一条 COMPLETED 回测都没有**（先前那批全 FAILED、
+            # 而已完成的被清了），于是这一档退到「任意一个已有账户」——回测不依赖账户资金，
+            # 借不到就换下一个来源，别让取证卡在一个与可复现性无关的外键上。
+            account_id = next((r.account_id for r in rows), None)
+            if account_id is None:
+                got = (await s.execute(text("select id from accounts limit 1"))).first()
+                account_id = got[0] if got else None
+            if account_id is None:
+                print("✗ 库里既没有已完成 run、也没有任何账户可借 account_id", file=sys.stderr)
+                return 2
+            src = NS(strategy_id=st.id, strategy_version=st.version,
+                     account_id=account_id, params={})
+            base_params = {"initial_cash": "100000.0"}
+            print(f"[pick] --strategy-id {a.strategy_id}（{st.name}，spec.symbol="
+                  f"{(st.spec or {}).get('symbol')}）", file=sys.stderr)
+        else:
+            src = next((r for r in rows if _single_symbol(r)), None) or (rows[0] if rows else None)
+            if src is None:
+                print("✗ 找不到可借参数的历史回测", file=sys.stderr)
+                return 2
+            base_params = dict(src.params or {})
         # 记下借来的参数，输出里带上——比对工具要靠它判"是不是同一实验"
         borrowed = {"strategy_id": str(src.strategy_id), "version": src.strategy_version,
                     "window": [src.params.get("start"), src.params.get("end")],
@@ -125,9 +159,8 @@ async def main() -> int:
         # 让两次跑都能完成——要验的是"同输入可复现"，不是那个窗口的覆盖度。
         import datetime as _dt
         end = _dt.date.today()
-        start = end - _dt.timedelta(days=40)
+        start = end - _dt.timedelta(days=a.days)
         # 单标的轨没有 universe，别去动它
-        base_params = dict(src.params or {})
         base_params["start"] = start.isoformat()
         base_params["end"] = end.isoformat()
         # universe 收敛到**确有数据**的标的：实测 510300/510050/159915 在该源里查不到行，
@@ -138,6 +171,7 @@ async def main() -> int:
             if keep:
                 base_params["universe"] = keep
         borrowed["rewritten_window"] = [base_params["start"], base_params["end"]]
+        borrowed["mode"] = "explicit-strategy" if a.strategy_id else "borrowed"
 
     provider = AstockMarketDataProvider(
         dsn=os.environ["ASTOCK_DSN"], source="astock_daily",
@@ -168,4 +202,5 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    import sys as _sys
+    raise SystemExit(asyncio.run(main(_sys.argv[1:])))
