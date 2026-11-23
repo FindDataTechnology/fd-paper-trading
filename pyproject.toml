@@ -34,6 +34,7 @@ dependencies = [
     # missing, so every window spanning a holiday is rejected forever. The
     # provider needs at least one real source to answer.
     "fd-open-data-mcp[data]>=0.5.40",
+    "fd-open-data-protocol>=0.4.0",
 ]
 
 [project.scripts]

@@ -95,7 +95,7 @@ def create_app(
         mcp_asgi = _mcp.http_app(path="/")
         mcp_lifespan = mcp_asgi.lifespan
         surface_mcp = _mcp
-        surface_mcp._wire_surface_report = "not_configured"
+        surface_mcp._surface_report = "not_configured"
     except Exception:  # pragma: no cover - MCP is optional for API-only use
         pass
 
@@ -149,10 +149,10 @@ def create_app(
     async def health() -> dict:
         if surface_mcp is not None:
             try:
-                from ..mcp import surface_report
+                from fd_open_data_protocol import surface_report
 
                 surface_report.ensure_started(surface_mcp)  # 首请求触发：loop 已在跑
-                state = getattr(surface_mcp, "_wire_surface_report", "not_configured")
+                state = getattr(surface_mcp, "_surface_report", "not_configured")
                 if state != "not_configured":
                     return {"status": "ok", "last_surface_report": state}
             except Exception:  # noqa: BLE001 — 自报态绝不影响健康面本体

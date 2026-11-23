@@ -825,15 +825,15 @@ data = [
 
 [[package]]
 name = "fd-open-data-protocol"
-version = "0.3.2"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dd/48/0cff3425c79a6d88040a01ca56cd138ef7d80c0b307ff28c23576fde229b/fd_open_data_protocol-0.3.2.tar.gz", hash = "sha256:9c1640d5134779c2c30e14300dcb27c5468bed7bf02aec95939a2a32b2d555bd", size = 51710, upload-time = "2026-11-04T13:08:00.739Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f0/e6/870d31c3c1e807e5d2befd7f777f2ff95af900285435b9f4434666bc2351/fd_open_data_protocol-0.4.0.tar.gz", hash = "sha256:8759d04f95b7eb665a92dbb4297c83ebfc3b830af5580ef66971b225ea9903ce", size = 68567, upload-time = "2026-11-23T08:50:03.649Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bb/97/6f58f26f2dc097c777d04aa6b50f6208e8579c8840d26ed1d836a48d0f46/fd_open_data_protocol-0.3.2-py3-none-any.whl", hash = "sha256:2606e820fc6e696b01c750579a8a077c42a5d1e4fc2914c90e79a5231dc12082", size = 46084, upload-time = "2026-11-04T13:07:59.491Z" },
+    { url = "https://files.pythonhosted.org/packages/65/7b/356954866deee480901150c9ec5e704cc18be8f8b01e49ba06f5c6b26360/fd_open_data_protocol-0.4.0-py3-none-any.whl", hash = "sha256:ee1d91b28376816ae539f53481e9b4be9f8da9ef9da12edbd6db1b9aef23a802", size = 60212, upload-time = "2026-11-23T08:50:02.203Z" },
 ]
 
 [[package]]
@@ -848,6 +848,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "fastmcp" },
     { name = "fd-open-data-mcp", extra = ["data"] },
+    { name = "fd-open-data-protocol" },
     { name = "greenlet" },
     { name = "httpx" },
     { name = "passlib", extra = ["bcrypt"] },
@@ -877,6 +878,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastmcp", specifier = ">=4.2.4,<5" },
     { name = "fd-open-data-mcp", extras = ["data"], specifier = ">=0.5.40" },
+    { name = "fd-open-data-protocol", specifier = ">=0.4.0" },
     { name = "greenlet", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
