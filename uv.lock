@@ -787,7 +787,7 @@ server = [
 
 [[package]]
 name = "fd-open-data-mcp"
-version = "0.5.40"
+version = "0.5.65"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "alembic" },
@@ -797,6 +797,7 @@ dependencies = [
     { name = "fastmcp" },
     { name = "fd-open-data-protocol" },
     { name = "jinja2" },
+    { name = "networkx" },
     { name = "pandas" },
     { name = "psycopg2-binary" },
     { name = "pydantic" },
@@ -807,9 +808,9 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a7/ac/536744cd40ca7010ee38ce6dd4b1d42582fed81e1edb51ced238b80dfe37/fd_open_data_mcp-0.5.40.tar.gz", hash = "sha256:7b716dfd23b5b65dc57b5c48e3b77455b3bf08c55e2509ef1ae4a140f65c9c47", size = 970064, upload-time = "2026-10-18T19:49:18.937Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b6/38/5af6012c025b83a0042982dce55a371d48af74eebe4f9d7052733d7d0e66/fd_open_data_mcp-0.5.65.tar.gz", hash = "sha256:309e400259d0ff2045607b641624ab76345f599bca3c31fbca11b8face30006a", size = 1572427, upload-time = "2026-11-23T09:32:15.504Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a1/c2/d415e68c0f780cd68b4c5e459ffea5a03e1c6925522ddd54fcf95ae7c5ea/fd_open_data_mcp-0.5.40-py3-none-any.whl", hash = "sha256:91e939fe4679b14694332cefc2d260e2ea099e68a0d6e58a6b752ce75aa8d19e", size = 720264, upload-time = "2026-10-18T19:49:17.044Z" },
+    { url = "https://files.pythonhosted.org/packages/91/76/c81107beb9f703c96cb154afc1a29bb07aa7ffc0d61edcd428d7149fe2cf/fd_open_data_mcp-0.5.65-py3-none-any.whl", hash = "sha256:19ca435a7360e953eb13967914be2c24710570bf145b15feb0e64b5fe2c17110", size = 981731, upload-time = "2026-11-23T09:32:14.319Z" },
 ]
 
 [package.optional-dependencies]
@@ -877,7 +878,7 @@ requires-dist = [
     { name = "bcrypt", specifier = ">=4.0,<4.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastmcp", specifier = ">=4.2.4,<5" },
-    { name = "fd-open-data-mcp", extras = ["data"], specifier = ">=0.5.40" },
+    { name = "fd-open-data-mcp", extras = ["data"], specifier = ">=0.5.60" },
     { name = "fd-open-data-protocol", specifier = ">=0.4.0" },
     { name = "greenlet", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
@@ -1508,6 +1509,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/83/f8/51569ac65d696c8ecbee95938f89d4abf00f47d58d48f6fbabfe8f0baefe/nest_asyncio-1.6.0.tar.gz", hash = "sha256:6f172d5449aca15afd6c646851f4e31e02c598d553a667e38cafa997cfec55fe", size = 7418, upload-time = "2024-01-21T14:25:19.227Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a0/c4/c2971a3ba4c6103a3d10c4b0f24f461ddc027f0f09763220cf35ca1401b3/nest_asyncio-1.6.0-py3-none-any.whl", hash = "sha256:87af6efd6b5e897c81050477ef65c62e2b2f35d51703cae01aff2905b1852e1c", size = 5195, upload-time = "2024-01-21T14:25:17.223Z" },
+]
+
+[[package]]
+name = "networkx"
+version = "3.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/76/3af777226b63a5e64a6b36b1ec5855c14e2b94a37096d4760e595fc43511/networkx-3.7.tar.gz", hash = "sha256:fd77a511bd90f39f3d016351345b52cf5319b813bdca01de3f755d3cca62e96a", size = 1866482, upload-time = "2026-09-21T16:45:16.974Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/cd/fe58041e9011f307c490e3e17dd48cc516448f7c698a3f2d9d9d65d7e6a8/networkx-3.7-py3-none-any.whl", hash = "sha256:e3fd2c13a7814cee3746340d8d7f8598a67f16a58bf47fb7f8793fab6efca1b0", size = 2142205, upload-time = "2026-09-21T16:45:14.609Z" },
 ]
 
 [[package]]

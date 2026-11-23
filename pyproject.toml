@@ -33,7 +33,10 @@ dependencies = [
     # fetcher installed fails as "could not ask" — which correctly stays
     # missing, so every window spanning a holiday is rejected forever. The
     # provider needs at least one real source to answer.
-    "fd-open-data-mcp[data]>=0.5.40",
+    # 0.5.60 起带 price_sources 注册表（change add-price-supply-and-caliber）：
+    # MARKET_DATA_SOURCE_ID 解析靠它，低于此版本的镜像启动即崩（2026-11-23 实撞：
+    # lock 被降到 0.5.40 后 CrashLoopBackOff）。下限必须钉在 0.5.60，不是 0.5.40。
+    "fd-open-data-mcp[data]>=0.5.60",
     "fd-open-data-protocol>=0.4.0",
 ]
 
