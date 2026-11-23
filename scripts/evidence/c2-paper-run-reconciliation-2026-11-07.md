@@ -42,7 +42,7 @@ RUNNING、零 error 事件、首 tick 消费到 pinned source 真实 bar，
 ## 生产拓扑事实（本次实探确认）
 
 - astock provider 单 DSN 面：`entities` + `concepts` + `semantic_observations_all`
-  三查询面同库 = 主 open-data 库（100.64.0.3:30432/fd_open_data）；A 股价格行物理在
+  三查询面同库 = 主 open-data 库（canonical PG，mesh 地址见部署 env）；A 股价格行物理在
   shard3（100.64.0.7，entity_id 58..5322 共 4576 只、max 2026-07-10），
   经 FDW `ft_sem_obs_xinru3` 联邦视图透出。
 - tick poll 默认 1800s（design D5）；本验等待两轮后才见首 tick。
