@@ -22,7 +22,7 @@ RUNNING、零 error 事件、首 tick 消费到 pinned source 真实 bar，
    是模拟器伪造的当日、equity 恒 100000。修复=推 origin 5 提交出片 sha-3be3d49
    （途中还修了 web 夹具漏 `stop_price` 的 TS 编译错）。
 2. **ASTOCK_DSN 口令错串**：分片 FDW server options 里的 `28ux…` 口令只对
-   100.64.0.6/0.7 分片机有效；主库 100.64.0.3 的 fd 口令与
+   分片机有效；主库的 fd 口令与
    `FD_OPEN_DATA_MCP_DATABASE_URL` 同串（`vxlA…`）。两串实测后纠偏入 Git
    （commit 19596ca）。
 3. **secret 曾被占位覆盖**：11-06 的占位 secret sync 摧毁了带外注入的
@@ -43,7 +43,7 @@ RUNNING、零 error 事件、首 tick 消费到 pinned source 真实 bar，
 
 - astock provider 单 DSN 面：`entities` + `concepts` + `semantic_observations_all`
   三查询面同库 = 主 open-data 库（canonical PG，mesh 地址见部署 env）；A 股价格行物理在
-  shard3（100.64.0.7，entity_id 58..5322 共 4576 只、max 2026-07-10），
+  shard3（一台分片机，entity_id 58..5322 共 4576 只、max 2026-07-10），
   经 FDW `ft_sem_obs_xinru3` 联邦视图透出。
 - tick poll 默认 1800s（design D5）；本验等待两轮后才见首 tick。
 - pod 需手动 delete 才能重读 envFrom secret（envFrom 不热载）。
