@@ -976,10 +976,14 @@ async def start_paper_run(
         }
     # simulation profile pinned at start, same rule as the backtest route: what
     # rules this run was simulated under, frozen so later config changes cannot
-    # rewrite it. Today the paper path models no fees and settles T+0; change B
-    # raises settlement to T+1 once the ledger supports it.
+    # rewrite it. The paper path charges the execution service's own cost model
+    # (commission + stamp tax; slippage 0), so the profile is read FROM that
+    # service rather than restated — a profile that disagrees with what actually
+    # charged would be worse than none.
     params["simulation_profile"] = build_profile(
-        cost_model=None,
+        cost_model=getattr(
+            getattr(request.app.state, "execution_service", None), "cost_model", None
+        ),
         settlement="T+1",
         lot="whole_share",
         price_world=_price_world(request.app),

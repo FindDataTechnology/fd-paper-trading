@@ -740,7 +740,10 @@ class PaperRunSupervisor:
                 run.params = {
                     **(run.params or {}),
                     "simulation_profile": build_profile(
-                        cost_model=None,
+                        cost_model=getattr(
+                            getattr(self.app.state, "execution_service", None),
+                            "cost_model", None,
+                        ),
                         settlement="T+1",
                         lot="whole_share",
                         price_world=self._price_world(),
