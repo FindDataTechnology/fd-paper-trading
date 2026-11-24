@@ -96,7 +96,7 @@ async def _wait_until(pred, *, timeout: float = 3.0, step: float = 0.01):
 
 
 async def _resting_sell_stop(
-    client, headers, place_order, movable, account_id, *, quantity="10"
+    client, headers, place_order, movable, account_id, *, quantity="10", app=None
 ):
     """买 ``quantity`` 股，再挂一张不会在挂单时触发的卖出止损。
 
@@ -108,6 +108,26 @@ async def _resting_sell_stop(
         headers, account_id, symbol="AAPL", side="BUY", quantity=quantity
     )
     assert buy.status_code == 202, buy.text
+    # Settle the buy to a prior day so the stop's sell is allowed under T+1
+    # (change paper-fees-and-t1-settlement). A real resting stop sits on
+    # overnight-held shares; a same-day buy's stop is correctly refused, which
+    # is covered by test_same_day_stop_cannot_fill_under_t1.
+    if app is not None:
+        from datetime import date as _date, timedelta as _td
+
+        from sqlalchemy import select as _select
+
+        from fd_paper_trading.persistence.models import PositionLot as _Lot
+        import uuid as _uuid
+
+        account_uuid = account_id if isinstance(account_id, _uuid.UUID) else _uuid.UUID(str(account_id))
+        async with app.state.db.session_factory() as session:
+            lots = (await session.execute(
+                _select(_Lot).where(_Lot.account_id == account_uuid)
+            )).scalars().all()
+            for lot in lots:
+                lot.opened_on = _date.today() - _td(days=1)
+            await session.commit()
 
     quote = await movable.get_quote("AAPL")
     stop_price = (quote.bid - Decimal("1.00")).quantize(Decimal("0.01"))
@@ -139,7 +159,7 @@ async def test_placing_a_stop_does_not_mark_it_triggered(
     headers = await auth_headers("trigger1@example.com")
     acct = (await create_account(headers, starting_balance=100000)).json()
     order_id, _ = await _resting_sell_stop(
-        client, headers, place_order, movable, acct["id"]
+        client, headers, place_order, movable, acct["id"], app=app
     )
     order = (await client.get(f"/api/v1/orders/{order_id}", headers=headers)).json()
     assert order["status"] == "OPEN"
@@ -159,7 +179,7 @@ async def test_an_untouched_stop_does_not_fill_on_a_later_order_for_that_symbol(
     headers = await auth_headers("trigger2@example.com")
     acct = (await create_account(headers, starting_balance=100000)).json()
     order_id, stop_price = await _resting_sell_stop(
-        client, headers, place_order, movable, acct["id"]
+        client, headers, place_order, movable, acct["id"], app=app
     )
 
     # 同标的另一张单——它的「新报价到达」会评估账户里的 resting 止损。
@@ -195,7 +215,7 @@ async def test_evaluating_a_resting_stop_twice_changes_nothing(
     headers = await auth_headers("trigger3@example.com")
     acct = (await create_account(headers, starting_balance=100000)).json()
     order_id, _ = await _resting_sell_stop(
-        client, headers, place_order, movable, acct["id"]
+        client, headers, place_order, movable, acct["id"], app=app
     )
 
     service = app.state.execution_service
@@ -219,7 +239,7 @@ async def test_a_crossed_stop_still_fills_at_its_stop_price(
     headers = await auth_headers("trigger4@example.com")
     acct = (await create_account(headers, starting_balance=100000)).json()
     order_id, stop_price = await _resting_sell_stop(
-        client, headers, place_order, movable, acct["id"]
+        client, headers, place_order, movable, acct["id"], app=app
     )
 
     movable.overrides["AAPL"] = stop_price - Decimal("2.00")
@@ -300,7 +320,7 @@ async def test_a_resting_stop_triggers_once_the_price_crosses(
     headers = await auth_headers("stops@example.com")
     acct = (await create_account(headers, starting_balance=100000)).json()
     order_id, stop_price = await _resting_sell_stop(
-        client, headers, place_order, movable, acct["id"]
+        client, headers, place_order, movable, acct["id"], app=app
     )
 
     # 新的一天：收盘价跌破止损价。用户什么都没做。
@@ -325,7 +345,7 @@ async def test_the_sweeper_task_wakes_stops_without_being_called(
     headers = await auth_headers("stops2@example.com")
     acct = (await create_account(headers, starting_balance=100000)).json()
     order_id, stop_price = await _resting_sell_stop(
-        client, headers, place_order, movable, acct["id"]
+        client, headers, place_order, movable, acct["id"], app=app
     )
 
     app.state.stop_sweeper.interval_seconds = 0.02
@@ -374,7 +394,7 @@ async def test_a_sweep_only_touches_accounts_that_actually_hold_a_stop(
         str(a) for a in await app.state.stop_sweeper.accounts_with_resting_stops()
     ]
 
-    await _resting_sell_stop(client, headers, place_order, movable, acct["id"])
+    await _resting_sell_stop(client, headers, place_order, movable, acct["id"], app=app)
     assert str(acct["id"]) in [
         str(a) for a in await app.state.stop_sweeper.accounts_with_resting_stops()
     ]
@@ -386,7 +406,7 @@ async def test_accounts_driven_by_an_active_run_are_left_to_the_runner(
     """活跃 run 的账户由 runner 评估并写 run 日志；sweeper 抢过去会让日志缺一行。"""
     headers = await auth_headers("stops5@example.com")
     acct = (await create_account(headers, starting_balance=100000)).json()
-    await _resting_sell_stop(client, headers, place_order, movable, acct["id"])
+    await _resting_sell_stop(client, headers, place_order, movable, acct["id"], app=app)
 
     strategy = await client.post(
         "/api/v1/strategies",
@@ -419,3 +439,47 @@ async def test_accounts_driven_by_an_active_run_are_left_to_the_runner(
     assert str(acct["id"]) not in [
         str(a) for a in await app.state.stop_sweeper.accounts_with_resting_stops()
     ], "活跃 run 的账户被 sweeper 抢走了（run 日志会缺触发原因）"
+
+
+async def test_same_day_stop_cannot_fill_under_t1(
+    app, client, auth_headers, create_account, place_order, movable
+):
+    """A stop on shares bought *today* cannot fill today (T+1) — and says why.
+
+    Honest counterpart to the settled-share tests: the trigger is real, but the
+    sell is not available until tomorrow, so the order is rejected with a reason
+    naming the limit. It must not silently vanish, and must not be recorded filled.
+    """
+    headers = await auth_headers("t1stop@example.com")
+    acct = (await create_account(headers, starting_balance=100000)).json()
+    qty = "10"
+    buy = await place_order(headers, acct["id"], symbol="AAPL", side="BUY", quantity=qty)
+    assert buy.status_code == 202
+
+    quote = await movable.get_quote("AAPL")
+    stop_price = (quote.bid - Decimal("1.00")).quantize(Decimal("0.01"))
+    placed = await client.post(
+        "/api/v1/orders",
+        json={
+            "account_id": acct["id"], "symbol": "AAPL", "side": "SELL",
+            "order_type": "STOP", "quantity": qty, "stop_price": str(stop_price),
+        },
+        headers=headers,
+    )
+    assert placed.status_code == 202
+    order_id = placed.json()["id"]
+
+    movable.overrides["AAPL"] = stop_price - Decimal("2.00")
+    async with app.state.db.session_factory() as session:
+        from fd_paper_trading.persistence.models import Account
+
+        account = await session.get(Account, uuid.UUID(acct["id"]), with_for_update=True)
+        await app.state.execution_service.evaluate_open_stops(session, account)
+        await session.commit()
+
+    order = (await client.get(f"/api/v1/orders/{order_id}", headers=headers)).json()
+    assert order["status"] == "REJECTED"
+    assert "insufficient_position" in (order.get("reject_reason") or "")
+    positions = (await client.get(f"/api/v1/accounts/{acct['id']}/positions", headers=headers)).json()
+    held = [p for p in positions if p["symbol"] == "AAPL"]
+    assert held and Decimal(str(held[0]["quantity"])) == Decimal(qty)

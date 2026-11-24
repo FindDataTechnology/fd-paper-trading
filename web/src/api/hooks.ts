@@ -14,6 +14,7 @@ import type {
   StrategyOut,
   StrategyRunDetailOut,
   StrategyRunOut,
+  RunComparison,
   StrategyCatalogOut,
   StrategyTemplateOut,
   StrategyUpdate,
@@ -280,6 +281,17 @@ export function useStrategyRun(id: string | null) {
       const status = query.state.data?.status;
       return status && ACTIVE_RUN_STATUSES.includes(status) ? 1500 : false;
     },
+  });
+}
+
+export function useCompareRuns(runId: string | null, otherId: string | null) {
+  return useQuery({
+    queryKey: ["run-comparison", runId, otherId],
+    queryFn: () =>
+      api
+        .get<RunComparison>(`/strategy-runs/${runId}/comparison/${otherId}`)
+        .then((r) => r.data),
+    enabled: !!runId && !!otherId,
   });
 }
 

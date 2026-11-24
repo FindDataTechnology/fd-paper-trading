@@ -31,8 +31,15 @@ from ..persistence.models import (
     Position,
     group_config,
 )
-from ..persistence.repositories import OrderRepository, PositionRepository, UserRepository
+from ..persistence.repositories import (
+    OrderRepository,
+    PositionLotRepository,
+    PositionRepository,
+    UserRepository,
+)
+from .costs import CostModel, apply_costs
 from .fill_engine import FillResult, SimFillEngine
+from .lots import available, consume_fifo, new_lot
 
 # How old a quote may be and still be traded against. Daily-close-derived quotes
 # (``fd_open_data``) stay valid through a weekend or a short holiday, so the
@@ -103,10 +110,20 @@ class PaperExecutionService:
         rate_limit_per_second: float = 0,
         rate_limit_burst: float = 20,
         max_quote_age_seconds: float = MAX_QUOTE_AGE_SECONDS,
+        cost_model: CostModel | None = None,
     ) -> None:
         self.provider = provider
         self.fill_engine = fill_engine or SimFillEngine()
         self.max_quote_age_seconds = max_quote_age_seconds
+        # Paper accounts pay A-share fees by default (change
+        # paper-fees-and-t1-settlement): a zero-cost paper account makes every
+        # comparison against a fee-modelling backtest optimistic by construction.
+        # Slippage defaults to 0 here, unlike the backtest: a paper fill already
+        # executes against the real bid/ask spread, and adding a modelled 5bps on
+        # top would charge the same friction twice *and* move the recorded fill
+        # price away from the quote the user saw. Commission and stamp tax have no
+        # such natural proxy and are charged.
+        self.cost_model = cost_model or CostModel(enabled=True, slippage_bps=Decimal(0))
         self.rate_limiter = (
             RateLimiter(rate_limit_per_second, rate_limit_burst)
             if rate_limit_per_second > 0
@@ -125,6 +142,7 @@ class PaperExecutionService:
         client_order_id: str | None = None,
         strategy_run_id: uuid.UUID | None = None,
         stop_price: Decimal | None = None,
+        trade_date=None,
     ) -> Order:
         # Idempotency: a replay of a submission already accepted under this key
         # returns the order that key produced. Nothing is re-fetched, re-priced
@@ -210,7 +228,8 @@ class PaperExecutionService:
         if result.fills:
             for price, qty in result.fills:
                 await self._apply_fill(
-                    session, account, order, instrument_id, symbol, side, qty, price
+                    session, account, order, instrument_id, symbol, side, qty, price,
+                    trade_date=trade_date,
                 )
             order.filled_quantity = result.filled_quantity
             order.avg_fill_price = result.avg_fill_price
@@ -272,8 +291,8 @@ class PaperExecutionService:
                 f"Daily order cap of {max_per_day} reached for this account",
             )
 
-    @staticmethod
     def _check_buying_power(
+        self,
         account: Account,
         side: str,
         order_type: str,
@@ -301,7 +320,15 @@ class PaperExecutionService:
             ref_price = stop_price if stop_price is not None else quote.ask
         else:
             ref_price = quote.ask  # market or crossing limit
-        if account.cash_balance < quantity * ref_price:
+        # Require cash for the *cost-inclusive* amount: slippage lifts the price
+        # and commission is charged on top, so checking quantity × raw price lets
+        # a fill that fits at the raw price drive cash negative the moment fees
+        # land — a state the paper ledger must never reach (design D7).
+        cost = apply_costs(
+            side=OrderSide.BUY, quantity=quantity, price=ref_price,
+            model=self.cost_model,
+        )
+        if account.cash_balance < -cost.cash_delta:
             raise OrderRejected(
                 "insufficient_buying_power", "Not enough cash for this order"
             )
@@ -460,18 +487,41 @@ class PaperExecutionService:
         side: str,
         qty: Decimal,
         price: Decimal,
+        trade_date=None,
     ) -> None:
         position = await PositionRepository(session).get(account.id, instrument_id)
-        # Nothing is sold that is not held: paper trading is cash-only and
-        # long-only, so a sell is always a reduction of an existing position.
-        # Enforced here (the single ledger entry point) so every caller — order
-        # placement and stop triggers alike — inherits the bound.
+        lots = await PositionLotRepository(session).list_for(account.id, instrument_id)
+        # The trading day a fill belongs to. For a live order it is the wall
+        # clock; a paper run replaying historical bars passes the bar's date, so
+        # T+1 is measured across *trading* days rather than across wall-clock
+        # days that all look like "today" during a backfill. Same value drives
+        # both the lot's open date and the sellability comparison, so they cannot
+        # disagree.
+        trade_day = trade_date or datetime.now(UTC).date()
+
+        # Fees and the effective (slippage-adjusted) price (change
+        # paper-fees-and-t1-settlement). The fill price the engine produced is the
+        # reference; the cost model turns it into what actually changes cash.
+        fill_cost = apply_costs(
+            side=side, quantity=qty, price=price, model=self.cost_model
+        )
+        effective_price = fill_cost.effective_price
+
+        # Nothing is sold that is not available to sell: paper trading is
+        # cash-only and long-only, so a sell is always a reduction; T+1 further
+        # restricts it to shares opened before today. Enforced here (the single
+        # ledger entry point) so order placement and stop triggers alike inherit
+        # the bound. A position with no lots at all predates lots and is fully
+        # sellable (design D5) — freezing every existing account would be the
+        # migration cost paid by the user.
         if side == OrderSide.SELL:
             held = position.quantity if position is not None else Decimal("0")
-            if qty > held:
+            sellable = available(lots, trade_day) if lots else held
+            if qty > sellable:
                 raise OrderRejected(
                     "insufficient_position",
-                    f"Cannot sell {qty} {symbol}: only {held} held",
+                    f"Cannot sell {qty} {symbol}: only {sellable} available "
+                    f"({held} held; same-day buys are not sellable under T+1)",
                 )
         if position is None:
             position = Position(
@@ -485,11 +535,49 @@ class PaperExecutionService:
             session.add(position)
             await session.flush()
 
-        realized = self._update_position(position, side, qty, price)
+        # Realized PnL comes from which lots were consumed (FIFO), not from the
+        # averaged position (change paper-fees-and-t1-settlement, design D6). On
+        # a buy it is zero; on a sell it is Σ (effective_price - lot cost) × taken,
+        # minus this sell's own commission and stamp tax.
+        realized = Decimal(0)
+        if side == OrderSide.SELL and lots:
+            consumptions = consume_fifo(
+                [self._lot_view(lot) for lot in lots], qty
+            )
+            realized = sum(
+                ((effective_price - c.lot.unit_cost) * c.taken for c in consumptions),
+                Decimal(0),
+            ) - (fill_cost.commission + fill_cost.stamp_tax)
+            # Apply consumption to the ORM rows (the view above is detached).
+            remaining = qty
+            for lot in lots:
+                if remaining <= 0:
+                    break
+                if lot.remaining <= 0:
+                    continue
+                take = lot.remaining if lot.remaining <= remaining else remaining
+                lot.remaining -= take
+                remaining -= take
+        elif side == OrderSide.BUY:
+            # One lot per buy, its unit cost including the buy's commission so a
+            # later sell's PnL is net of what it cost to acquire.
+            per_share_fee = (
+                fill_cost.commission / qty if qty else Decimal(0)
+            )
+            session.add(new_lot(
+                account_id=account.id,
+                instrument_id=instrument_id,
+                symbol=symbol,
+                opened_on=trade_day,
+                quantity=qty,
+                unit_cost=effective_price + per_share_fee,
+            ))
 
-        signed_qty = qty if side == OrderSide.BUY else -qty
-        cash_delta = -signed_qty * price
-        account.cash_balance += cash_delta
+        # The averaged position still drives the positions view; only its realized
+        # figure is taken from the FIFO result so the two do not disagree.
+        self._update_position(position, side, qty, effective_price, realized)
+
+        account.cash_balance += fill_cost.cash_delta
 
         session.add(
             Fill(
@@ -498,17 +586,20 @@ class PaperExecutionService:
                 instrument_id=instrument_id,
                 side=side,
                 quantity=qty,
-                price=price,
+                price=effective_price,
                 # 这一笔自己实现的那部分（买入为 0）。落到成交行上，"今日已实现"
                 # 才是一条带 ts 的求和；持仓行那个累计值仍按原样维护，两者分工不变。
                 realized_pnl=realized,
+                commission=fill_cost.commission,
+                stamp_tax=fill_cost.stamp_tax,
+                slippage_cost=fill_cost.slippage_cost,
             )
         )
         session.add(
             BalanceTransaction(
                 account_id=account.id,
                 type="trade",
-                amount=cash_delta,
+                amount=fill_cost.cash_delta,
                 balance_after=account.cash_balance,
                 reference=str(order.id),
             )
@@ -516,10 +607,26 @@ class PaperExecutionService:
         await session.flush()
 
     @staticmethod
+    def _lot_view(lot) -> "LotLike":  # avoid import cycle in type-only use
+        from .lots import LotLike
+
+        return LotLike(
+            remaining=lot.remaining, unit_cost=lot.unit_cost, opened_on=lot.opened_on
+        )
+
+    @staticmethod
     def _update_position(
-        position: Position, side: str, qty: Decimal, price: Decimal
+        position: Position, side: str, qty: Decimal, price: Decimal,
+        realized: Decimal | None = None,
     ) -> Decimal:
-        """Apply a fill to a signed-quantity position; return realized PnL."""
+        """Maintain the averaged position from a fill; return the realized amount.
+
+        ``realized`` is supplied by the caller when it computed PnL from lots
+        (the authoritative figure); this method still maintains ``quantity`` and
+        ``avg_price`` for the positions view, and adds the realized amount to the
+        lifetime accumulator. When ``realized`` is None (no lots, legacy path) it
+        falls back to the average-cost arithmetic, matching the pre-lot behaviour.
+        """
         signed = qty if side == OrderSide.BUY else -qty
         old_qty = position.quantity
         old_avg = position.avg_price
@@ -527,7 +634,9 @@ class PaperExecutionService:
         if old_qty == 0:
             position.quantity = signed
             position.avg_price = price
-            return Decimal("0")
+            if realized:
+                position.realized_pnl += realized
+            return realized or Decimal("0")
 
         same_direction = (old_qty > 0) == (signed > 0)
         if same_direction:
@@ -538,10 +647,11 @@ class PaperExecutionService:
 
         # Reducing / closing / flipping.
         closing = min(qty, abs(old_qty))
-        realized = (price - old_avg) * closing * (1 if old_qty > 0 else -1)
         new_qty = old_qty + signed
         if abs(signed) > abs(old_qty):
             position.avg_price = price  # flipped to the other side
         position.quantity = new_qty
+        if realized is None:
+            realized = (price - old_avg) * closing * (1 if old_qty > 0 else -1)
         position.realized_pnl += realized
         return realized

@@ -29,6 +29,19 @@ from fd_paper_trading.marketdata.simulated import SimulatedMarketDataProvider
 from fd_paper_trading.persistence.models import Fill, Position
 
 
+#: Sell fees the ledger now subtracts from realized PnL (change
+#: paper-fees-and-t1-settlement). Realized is *net*: gross minus commission and
+#: stamp tax on the sell notional. Tests derive the expected net rather than
+#: hard-coding 400, so a rate change does not silently break them.
+_COMMISSION = Decimal("0.00025")
+_STAMP = Decimal("0.0005")
+
+
+def _net_realized(gross: Decimal, sell_qty: Decimal, sell_price: Decimal) -> Decimal:
+    notional = sell_qty * sell_price
+    return gross - notional * _COMMISSION - notional * _STAMP
+
+
 class ScriptedProvider(SimulatedMarketDataProvider):
     """可脚本化的行情源：按测试给的日线与报价回答（缺省回落到模拟源）。"""
 
@@ -78,8 +91,32 @@ async def _setup(app, client, auth_headers, create_account, place_order, scripte
             select(Position).where(Position.account_id == account_id)
         )).scalar_one()
         pos.avg_price = Decimal("100")
+        # The buy above happened "today", which T+1 makes unsellable today. These
+        # tests are about PnL accounting, not settlement, and a real user selling
+        # would have bought on a prior day — so backdate this lot to yesterday.
+        await _settle_lots_today(session, account_id)
         await session.commit()
     return headers, account_id
+
+
+async def _settle_lots_today(session, account_id) -> None:
+    """Backdate every open lot of the account to yesterday and pin cost to 100.
+
+    Pinning ``unit_cost`` matters because realized PnL now comes from the lot, not
+    from ``position.avg_price`` — the setup overrides the averaged price to a known
+    100 so these assertions can be arithmetic, and the lot must agree with it.
+    """
+    from datetime import timedelta
+
+    from fd_paper_trading.persistence.models import PositionLot
+
+    yesterday = date.today() - timedelta(days=1)
+    lots = (await session.execute(
+        select(PositionLot).where(PositionLot.account_id == account_id)
+    )).scalars().all()
+    for lot in lots:
+        lot.opened_on = yesterday
+        lot.unit_cost = Decimal("100")
 
 
 async def _fill_ids(app, account_id) -> set:
@@ -127,7 +164,7 @@ async def test_lifetime_realized_does_not_leak_into_today(
         app, client, auth_headers, create_account, place_order, scripted
     )
     fill = await _sell(client, app, headers, account_id, place_order, scripted, price="180")
-    assert fill.realized_pnl == Decimal("400"), "5 股 ×(180-100)"
+    assert fill.realized_pnl == _net_realized(Decimal("400"), Decimal("5"), Decimal("180")), "5 股 ×(180-100) 扣卖出费"
     await _backdate(app, fill.id, datetime.now(timezone.utc) - timedelta(days=1))
 
     scripted.bars["AAPL"] = [_bar(date.today() - timedelta(days=1), "100")]
@@ -141,7 +178,7 @@ async def test_lifetime_realized_does_not_leak_into_today(
         pos = (await session.execute(
             select(Position).where(Position.account_id == account_id)
         )).scalar_one()
-        assert pos.realized_pnl == Decimal("400"), "终身累计仍在（持仓视图要用）"
+        assert pos.realized_pnl == _net_realized(Decimal("400"), Decimal("5"), Decimal("180")), "终身累计仍在（持仓视图要用，净费）"
 
 
 async def test_unrealized_uses_previous_close_not_entry_price(
@@ -220,15 +257,17 @@ async def test_configured_day_boundary_is_applied(
     base = datetime.combine(date.today(), datetime.min.time(), timezone.utc)
 
     early = await _sell(client, app, headers, account_id, place_order, scripted, price="180")
-    assert early.realized_pnl == Decimal("400")
+    assert early.realized_pnl == _net_realized(Decimal("400"), Decimal("5"), Decimal("180"))
     await _backdate(app, early.id, base + timedelta(hours=8))  # 今天 08:00，边界(9 点)之前
     late = await _sell(client, app, headers, account_id, place_order, scripted, price="190")
-    assert late.realized_pnl == Decimal("450")
+    assert late.realized_pnl == _net_realized(Decimal("450"), Decimal("5"), Decimal("190"))
     await _backdate(app, late.id, base + timedelta(hours=10))  # 今天 10:00，边界之后
 
     monkeypatch.setattr(get_settings(), "pnl_day_start_utc_hour", 9)
     body = await _get(client, headers, account_id)
-    assert Decimal(body["realized_today"]) == Decimal("450"), (
+    assert Decimal(body["realized_today"]) == _net_realized(
+        Decimal("450"), Decimal("5"), Decimal("190")
+    ), (
         f"08:00 那笔（400）在配置的日界(9 点)之前，不该计入今日；"
         f"实际今日已实现 {body['realized_today']}（写死 0 点会得到 850）"
     )
@@ -245,7 +284,7 @@ async def test_a_sell_fill_carries_its_own_realized_pnl(
         app, client, auth_headers, create_account, place_order, scripted
     )
     fill = await _sell(client, app, headers, account_id, place_order, scripted, price="150")
-    assert fill.realized_pnl == Decimal("250"), (
+    assert fill.realized_pnl == _net_realized(Decimal("250"), Decimal("5"), Decimal("150")), (
         f"5 股 ×(150-100) 应为 250，实际 {fill.realized_pnl}"
     )
 
@@ -262,7 +301,7 @@ async def test_legacy_fill_without_attribution_is_reported_not_counted_as_zero(
         app, client, auth_headers, create_account, place_order, scripted
     )
     fill = await _sell(client, app, headers, account_id, place_order, scripted, price="180")
-    assert fill.realized_pnl == Decimal("400")
+    assert fill.realized_pnl == _net_realized(Decimal("400"), Decimal("5"), Decimal("180"))
 
     async with app.state.db.session_factory() as session:
         legacy = await session.get(Fill, fill.id)

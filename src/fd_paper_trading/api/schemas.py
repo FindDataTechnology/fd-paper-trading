@@ -15,6 +15,13 @@ class FillOut(BaseModel):
     price: Decimal
     side: str
     ts: datetime
+    #: Per-fill cost and realized PnL (change paper-fees-and-t1-settlement /
+    #: day-scoped daily PnL). Null = the fill predates these columns; 0 = modelled
+    #: and zero — the same distinction the columns themselves carry.
+    commission: Decimal | None = None
+    stamp_tax: Decimal | None = None
+    slippage_cost: Decimal | None = None
+    realized_pnl: Decimal | None = None
 
 
 class OrderOut(BaseModel):
@@ -267,7 +274,28 @@ class StrategyRunOut(BaseModel):
     param_grid: dict | None = None
     scan_results: list | None = None
     in_sample: bool | None = None
+    #: The rules this run was simulated under, pinned at creation (change
+    #: add-paper-run-metrics). null = the run predates the field (unmodelled);
+    #: {"cost":{"mode":"none"}} means "costs were modelled and were zero" —
+    #: different facts, both stated rather than inferred.
+    simulation_profile: dict | None = None
     started_at: datetime | None = None
+    stopped_at: datetime | None = None
+    created_at: datetime
+
+    @model_validator(mode="after")
+    def _project_simulation_profile(self) -> "StrategyRunOut":
+        """Lift ``params.simulation_profile`` onto its own field for clients.
+
+        It lives in ``params`` on the row (no migration), but a client reading a
+        run should not have to know that. Only fills when the field was not set
+        explicitly, so an explicit value (tests, future columns) wins.
+        """
+        if self.simulation_profile is None:
+            profile = (self.params or {}).get("simulation_profile")
+            if isinstance(profile, dict):
+                self.simulation_profile = profile
+        return self
     stopped_at: datetime | None = None
     created_at: datetime
 

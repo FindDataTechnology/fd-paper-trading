@@ -515,3 +515,25 @@ def test_instructions_positive_while_trade_count_zero() -> None:
     )
     # 这正是旧判据会误判的形态：指令数 > 0，但成交数 = 0。
     assert len(instructions) > 0 and filled == 0
+
+
+def test_costs_reduce_final_equity_and_are_summarised() -> None:
+    """A cost model on the weight track lowers final equity and records fees.
+
+    Change paper-fees-and-t1-settlement: the weight track used to reject the cost
+    model outright. Now it charges the same fees as the single-symbol track and
+    the ledger, and the summary names the total.
+    """
+    from fd_paper_trading.execution.costs import CostModel
+
+    spec = _spec(universe=["A"], weights_series={"2026-01-01": {"A": 1.0}})
+    bars = {"A": [_bar(1, "10.0"), _bar(2, "10.0")]}
+    free = replay_weights(spec, bars, Decimal(10000))
+    charged = replay_weights(
+        spec, bars, Decimal(10000),
+        costs=CostModel(enabled=True, slippage_bps=Decimal(0)),
+    )
+    assert free.cost_summary is None, "zero-cost path keeps the pre-cost record shape"
+    assert charged.cost_summary is not None
+    assert Decimal(charged.cost_summary["total_fees"]) > 0
+    assert charged.equity_points[-1][1] < free.equity_points[-1][1]

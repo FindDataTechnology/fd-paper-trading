@@ -20,14 +20,13 @@ equity = cash + position marked at the bar's close.
 
 from __future__ import annotations
 
-import math
-import statistics
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Protocol
 
 from ..marketdata.provider import Bar
+from .run_stats import headline_stats, max_drawdown as _max_drawdown, sharpe as _sharpe
 from .costs import CostModel, CostTotals, accumulate, apply_costs
 from .ctx import Signal, StrategyContext
 from .risk_overlay import CooldownState, RiskConfig, evaluate_bar_overlay
@@ -81,6 +80,10 @@ class _Portfolio:
     trade_count: int = 0
     closed_trips: int = 0
     winning_trips: int = 0
+    #: Shares bought on the *current* bar (change paper-fees-and-t1-settlement).
+    #: A daily bar is one trading day, so T+1 means these cannot be sold until the
+    #: next bar. Reset at the start of each bar.
+    bought_today: Decimal = Decimal(0)
     _trip_realized: Decimal = field(default=Decimal(0))
 
     def apply(self, signed_qty: Decimal, price: Decimal) -> None:
@@ -142,13 +145,30 @@ def _apply_signal(
     if price is None:
         return  # limit not crossed — expires at bar end
     model = costs or CostModel()
-    fill = apply_costs(side=signal.side, quantity=signal.quantity, price=price, model=model)
+    if signal.side == "SELL":
+        # T+1 (change paper-fees-and-t1-settlement) restricts selling shares
+        # bought on *this* bar. It only bites when there is a long position to
+        # protect: the backtester deliberately allows opening a short from flat
+        # (mirroring the live ledger's signed position), and T+1 has nothing to
+        # say about that. So clamp only the same-day-bought portion of an
+        # existing long, never a from-flat short.
+        if portfolio.position > 0:
+            sellable = portfolio.position - portfolio.bought_today
+            qty = signal.quantity if signal.quantity <= sellable else sellable
+            if qty <= 0:
+                return  # nothing settled to sell — same-day round trip refused
+        else:
+            qty = signal.quantity
+        fill = apply_costs(side="SELL", quantity=qty, price=price, model=model)
+    else:
+        fill = apply_costs(side="BUY", quantity=signal.quantity, price=price, model=model)
     if signal.side == "BUY":
         if fill.notional + fill.commission > portfolio.cash:
             return  # unaffordable buy skipped
         signed = signal.quantity
+        portfolio.bought_today += signal.quantity
     else:
-        signed = -signal.quantity
+        signed = -qty
     portfolio.trade_count += 1
     portfolio.cash += fill.cash_delta
     # The position is carried at the effective fill price: cost is realized in the
@@ -163,48 +183,25 @@ def _apply_signal(
 # ---------------------------------------------------------------------------
 
 
-def _sharpe(equity: list[Decimal]) -> float | None:
-    rets = [float(equity[i] / equity[i - 1]) - 1.0 for i in range(1, len(equity))]
-    if len(rets) < 2:
-        return None
-    sd = statistics.stdev(rets)
-    if sd == 0:
-        return None
-    return statistics.mean(rets) / sd * math.sqrt(252)
-
-
-def _max_drawdown(equity: list[Decimal]) -> Decimal:
-    peak = equity[0]
-    mdd = Decimal(0)
-    for eq in equity:
-        if eq > peak:
-            peak = eq
-        if peak > 0:
-            dd = (peak - eq) / peak
-            if dd > mdd:
-                mdd = dd
-    return mdd
-
-
 def compute_stats(
     equity: list[Decimal], initial_cash: Decimal, portfolio: _Portfolio
 ) -> dict:
-    final = equity[-1]
-    total_return = float(final / initial_cash) - 1.0 if initial_cash else 0.0
-    sharpe = _sharpe(equity)
+    """Backtest headline stats: the shared arithmetic plus this track's own fields.
+
+    The pure arithmetic (return/drawdown/Sharpe/final) lives in
+    ``run_stats.headline_stats`` so the live-paper track can produce the same
+    numbers instead of growing a second implementation (design D2). What stays
+    here is only what is the backtester's own: ``win_rate`` measured over closed
+    round trips, which the paper ledger does not track.
+    """
+    stats = headline_stats(equity, initial_cash, portfolio.trade_count)
     win_rate = (
         portfolio.winning_trips / portfolio.closed_trips
         if portfolio.closed_trips
         else None
     )
-    return {
-        "total_return": round(total_return, 6),
-        "max_drawdown": round(float(_max_drawdown(equity)), 6),
-        "sharpe": round(sharpe, 6) if sharpe is not None else None,
-        "win_rate": round(win_rate, 6) if win_rate is not None else None,
-        "trade_count": portfolio.trade_count,
-        "final_equity": round(float(final), 4),
-    }
+    stats["win_rate"] = round(win_rate, 6) if win_rate is not None else None
+    return stats
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +283,8 @@ async def replay(
     cooldown = CooldownState()
     peak_value: Decimal | None = None
     for i, bar in enumerate(bars):
+        # New trading day: yesterday's buys have settled (T+1).
+        portfolio.bought_today = Decimal(0)
         ctx = StrategyContext(
             bars[: i + 1], position=portfolio.position, cash=portfolio.cash
         )

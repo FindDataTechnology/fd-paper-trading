@@ -29,24 +29,28 @@ async def test_place_market_buy_fills_at_ask(client, auth_headers, create_accoun
     assert _dec(positions[0]["quantity"]) == Decimal("10")
     assert _dec(positions[0]["avg_price"]) == avg
 
-    # Cash reduced by 10 * avg.
+    # Cash reduced by 10 * avg *plus the buy's commission* (change
+    # paper-fees-and-t1-settlement: paper accounts pay A-share fees).
     rs = await client.get(f"/api/v1/accounts/{aid}", headers=h)
     cash = _dec(rs.json()["cash_balance"])
-    assert abs(cash - (Decimal("100000") - Decimal("10") * avg)) < Decimal("0.01")
+    notional = Decimal("10") * avg
+    commission = notional * Decimal("0.00025")
+    assert abs(cash - (Decimal("100000") - notional - commission)) < Decimal("0.01")
 
 
-async def test_market_sell_after_buy_reduces_position(client, auth_headers, create_account, place_order):
+async def test_market_sell_same_day_is_refused_under_t1(client, auth_headers, create_account, place_order):
+    """A share bought today cannot be sold today (A-share T+1)."""
     h = await auth_headers("alice@example.com")
     acct = (await create_account(h, starting_balance=Decimal("100000"))).json()
     aid = acct["id"]
 
-    buy = (await place_order(h, aid, symbol="AAPL", side="BUY", order_type="MARKET", quantity="10")).json()
+    await place_order(h, aid, symbol="AAPL", side="BUY", order_type="MARKET", quantity="10")
     sell = await place_order(h, aid, symbol="AAPL", side="SELL", order_type="MARKET", quantity="4")
-    assert sell.status_code == 202
-    assert sell.json()["status"] == "FILLED"
-
-    rp = await client.get(f"/api/v1/accounts/{aid}/positions", headers=h)
-    assert _dec(rp.json()[0]["quantity"]) == Decimal("6")  # 10 - 4
+    assert sell.status_code == 400
+    body = sell.json()
+    assert body["error"]["code"] == "insufficient_position"
+    # The message names both the sellable count and the holding.
+    assert "available" in body["error"]["message"]
 
 
 async def test_limit_order_rests_when_not_crossing(client, auth_headers, create_account, place_order):
@@ -263,7 +267,12 @@ async def test_fill_records_a_trade_ledgered_at_the_resulting_balance(
     assert len(trades) == 1, f"一次成交一条 trade 流水，实际 {len(trades)}：{txns}"
 
     kind, amount, balance_after, reference = trades[0]
-    assert amount == -(Decimal("10") * avg)          # 买入扣现金
+    # Buy debits notional *plus commission* (change paper-fees-and-t1-settlement).
+    # Cash is stored quantized to 4dp while the cost arithmetic is not, so compare
+    # within a cent rather than to the last decimal.
+    notional = Decimal("10") * avg
+    commission = notional * Decimal("0.00025")
+    assert abs(amount - (-(notional + commission))) < Decimal("0.01")  # 含佣金
     assert balance_after == cash                     # ← 成交后的余额，不是成交前的
     assert reference == order["id"]                  # 能回指到订单
     # 可对账的链：上一笔余额 + 本笔金额 == 本笔记录的余额

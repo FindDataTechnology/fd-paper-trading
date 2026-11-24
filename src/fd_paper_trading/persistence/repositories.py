@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,6 +20,7 @@ from .models import (
     BalanceTransaction,
     Fill,
     Order,
+    PositionLot,
     OrderStatus,
     OrderType,
     Position,
@@ -264,6 +265,44 @@ class PositionRepository:
         return res.scalar_one_or_none()
 
 
+class PositionLotRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list_open_for(
+        self, account_id: uuid.UUID, instrument_id: str
+    ) -> list[PositionLot]:
+        """Lots with shares left, oldest first (FIFO order)."""
+        res = await self.session.execute(
+            select(PositionLot)
+            .where(
+                PositionLot.account_id == account_id,
+                PositionLot.instrument_id == instrument_id,
+                PositionLot.remaining > 0,
+            )
+            .order_by(PositionLot.opened_on.asc(), PositionLot.created_at.asc())
+        )
+        return list(res.scalars().all())
+
+    async def list_for(self, account_id: uuid.UUID, instrument_id: str) -> list[PositionLot]:
+        """All lots for the instrument, open or exhausted (for availability + tests)."""
+        res = await self.session.execute(
+            select(PositionLot)
+            .where(
+                PositionLot.account_id == account_id,
+                PositionLot.instrument_id == instrument_id,
+            )
+            .order_by(PositionLot.opened_on.asc(), PositionLot.created_at.asc())
+        )
+        return list(res.scalars().all())
+
+    async def delete_for_account(self, account_id: uuid.UUID) -> None:
+        """Clear every lot on an account (account reset)."""
+        await self.session.execute(
+            delete(PositionLot).where(PositionLot.account_id == account_id)
+        )
+
+
 class FillRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -402,6 +441,20 @@ class StrategyRunRepository:
     async def add_equity_points(self, points: list[StrategyEquityPoint]) -> None:
         self.session.add_all(points)
         await self.session.flush()
+
+    async def count_fills_for_run(self, run_id: uuid.UUID) -> int:
+        """Fills produced by orders attributed to this run.
+
+        The paper run's ``trade_count``. Counting fills (not orders) is the
+        point: an order that rested or was rejected is not a trade, and a
+        partially-filled one is one fill, not one trade per order row.
+        """
+        res = await self.session.execute(
+            select(func.count(Fill.id))
+            .join(Order, Order.id == Fill.order_id)
+            .where(Order.strategy_run_id == run_id)
+        )
+        return int(res.scalar_one())
 
     async def list_equity_points(self, run_id: uuid.UUID) -> list[StrategyEquityPoint]:
         res = await self.session.execute(

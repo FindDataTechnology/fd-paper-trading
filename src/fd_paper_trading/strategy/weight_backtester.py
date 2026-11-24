@@ -36,6 +36,7 @@ from decimal import Decimal
 from typing import Callable, Mapping, Sequence
 
 from ..marketdata.provider import Bar
+from ..execution.costs import CostModel, apply_costs
 from .backtester import EvaluationError
 from .ctx import SymbolSeries, WeightContext
 from .risk_overlay import (
@@ -129,6 +130,10 @@ class WeightBacktestResult:
     #: `risk_triggers`），未配置时为 None——"没配"与"配了没触发"必须能分开。
     risk_config: dict | None = None
     risk_triggers: list[dict] | None = None
+    #: Cost summary when a cost model was enabled (change
+    #: paper-fees-and-t1-settlement); None on the zero-cost path, preserving the
+    #: pre-cost record shape exactly.
+    cost_summary: dict | None = None
 
 
 class WeightSource:
@@ -206,6 +211,9 @@ class _WeightPortfolio:
 
     def __init__(self, cash: Decimal) -> None:
         self.cash = cash
+        #: Fees booked so far (change paper-fees-and-t1-settlement), for the run's
+        #: cost summary. Stays 0 on the zero-cost path.
+        self.fees_paid = Decimal(0)
         self.positions: dict[str, Decimal] = {}
         #: Per-share average cost. Absent for symbols never bought in this replay.
         self.cost: dict[str, Decimal] = {}
@@ -216,25 +224,47 @@ class _WeightPortfolio:
     def cost_of(self, symbol: str) -> Decimal | None:
         return self.cost.get(symbol)
 
-    def apply_fill(self, symbol: str, signed: Decimal, price: Decimal) -> None:
+    def apply_fill(
+        self, symbol: str, signed: Decimal, price: Decimal,
+        costs: "CostModel | None" = None,
+    ) -> Decimal:
         """Book one fill: cash, quantity, and the average cost on the buy side.
 
         A sell leaves the average untouched (selling does not change what the
         remaining shares cost); a position returning to zero drops both the
         quantity and the cost so a later re-entry starts a fresh basis rather
         than inheriting the previous round's entry price.
+
+        ``costs`` (change paper-fees-and-t1-settlement) applies the same fee
+        arithmetic the single-symbol track and the live ledger use — one
+        implementation, three callers. ``None`` is the zero-cost path and is
+        bit-identical to before this parameter existed. Returns the fee total
+        booked (0 on the zero-cost path) so the run can summarise it.
         """
-        self.cash -= signed * price
+        fee = Decimal(0)
+        if costs is not None and costs.enabled:
+            side = "BUY" if signed > 0 else "SELL"
+            fill = apply_costs(
+                side=side, quantity=abs(signed), price=price, model=costs
+            )
+            self.cash += fill.cash_delta
+            price = fill.effective_price
+            fee = fill.commission + fill.stamp_tax
+        else:
+            self.cash -= signed * price
         held = self.position(symbol)
         new_qty = held + signed
         if new_qty == 0:
             self.positions.pop(symbol, None)
             self.cost.pop(symbol, None)
-            return
+            self.fees_paid += fee
+            return fee
         if signed > 0:
             prior = self.cost.get(symbol, Decimal(0))
             self.cost[symbol] = (held * prior + signed * price) / new_qty
         self.positions[symbol] = new_qty
+        self.fees_paid += fee
+        return fee
 
     def equity(self, marks: Mapping[str, Decimal]) -> Decimal:
         total = self.cash
@@ -302,6 +332,7 @@ def replay_weights(
     risk_thresholds: Mapping[str, Any] | None = None,
     risk_sectors: Mapping[str, str] | None = None,
     risk: RiskConfig | None = None,
+    costs: "CostModel | None" = None,
 ) -> WeightBacktestResult:
     """Replay a universe, rebalancing every ``every_n_bars`` trading dates.
 
@@ -392,7 +423,7 @@ def replay_weights(
                     symbol=sym, side="SELL", quantity=qty,
                     price=trigger.fill_price, requested_quantity=qty,
                 )
-                portfolio.apply_fill(sym, -qty, trigger.fill_price)
+                portfolio.apply_fill(sym, -qty, trigger.fill_price, costs=costs)
                 risk_fills.append(fill)
                 cooldown.arm(sym, risk_cfg.cooldown_bars)
                 peaks.pop(sym, None)
@@ -455,7 +486,7 @@ def replay_weights(
                 snapshot.target_weights = dict(target)
                 snapshot.cash_floor = float(cash_floor)
                 snapshot.instructions = _rebalance(
-                    portfolio, marks, stale, target_symbols, day
+                    portfolio, marks, stale, target_symbols, day, costs=costs
                 )
             except EvaluationError as exc:
                 snapshot.error = str(exc)
@@ -504,6 +535,10 @@ def replay_weights(
         risk_events=risk_events,
         risk_config=risk_cfg.to_dict() if risk_cfg is not None else None,
         risk_triggers=risk_triggers or None,
+        cost_summary=(
+            {"total_fees": str(portfolio.fees_paid)}
+            if (costs is not None and costs.enabled) else None
+        ),
     )
 
 
@@ -513,6 +548,7 @@ def _rebalance(
     stale: Sequence[str],
     target: Mapping[str, float],
     day: date,
+    costs: "CostModel | None" = None,
 ) -> list[Instruction]:
     """Turn target weights into instructions, applying the three rules in order.
 
@@ -666,7 +702,7 @@ def _rebalance(
             continue
         signed = ins.quantity if ins.side == "BUY" else -ins.quantity
         # 记账走 apply_fill：它同时维护每股成本，overlay 的绝对止损要靠它。
-        portfolio.apply_fill(ins.symbol, signed, ins.price)
+        portfolio.apply_fill(ins.symbol, signed, ins.price, costs=costs)
     return instructions
 
 

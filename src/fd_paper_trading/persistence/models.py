@@ -278,8 +278,65 @@ class Fill(Base):
     #: 保本平仓"，而它可能实现了一大笔。回填只能靠重放成本基础（第二套口径），刻意
     #: 不做；端点改为统计窗口内的 ``NULL`` 笔数并如实报出（spec: 日界那条的末句）。
     realized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    #: Per-fill cost breakdown (change paper-fees-and-t1-settlement). All nullable
+    #: with NULL meaning "this fill predates the columns" — the same discipline as
+    #: ``realized_pnl``: filling history with 0 would claim "this trade paid no
+    #: fees", which it did not. 0 means "modelled, and it was zero".
+    commission: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    stamp_tax: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    slippage_cost: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
 
     order: Mapped["Order"] = relationship(back_populates="fills")
+
+
+class PositionLot(Base):
+    """One buy batch of a position, for T+1 settlement and FIFO realized PnL.
+
+    ## Why lots rather than a single averaged position
+
+    A-share T+1 says *shares bought today cannot be sold today*. That question
+    ("which shares") cannot be answered from an average cost: once two buys merge
+    into ``quantity`` + ``avg_price``, the fact of **when each share arrived** is
+    gone. So each buy makes a lot carrying its open date, and:
+
+    - sellable quantity = Σ ``remaining`` where ``opened_on < today``;
+    - realized PnL = Σ over the FIFO-consumed lots of
+      ``(sell_price - unit_cost) × taken``.
+
+    ``unit_cost`` includes the buy's commission (amortized per share), so the
+    realized PnL is *net* of what was paid to acquire.
+
+    ## Why ``remaining`` is stored, not recomputed from fills
+
+    ``reset`` clears lots while leaving fill history intact. Recomputing
+    "remaining" from fills would then resurrect lots the reset deliberately
+    dropped — a phantom sellable position. The stored ``remaining`` is the
+    authority; a consistency test pins ``Σ remaining == position.quantity``.
+    """
+
+    __tablename__ = "position_lots"
+    __table_args__ = (
+        Index("ix_position_lots_account_instrument_opened",
+              "account_id", "instrument_id", "opened_on"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    instrument_id: Mapped[str] = mapped_column(String(80))
+    symbol: Mapped[str] = mapped_column(String(40))
+    #: Trading day the shares were bought (the T+1 cut). A date, not a timestamp:
+    #: the rule is "not today", and a timestamp would invite per-second reasoning
+    #: the exchange does not do.
+    opened_on: Mapped[date] = mapped_column(Date)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    #: What is left of this lot. Reaches 0 when fully sold; the row is kept (it is
+    #: the audit of what was bought and when) rather than deleted.
+    remaining: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    #: Per-share cost including the buy's commission, so realized PnL is net.
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class Position(Base):

@@ -61,6 +61,8 @@ from ..persistence.repositories import (
 )
 from ..valuation import marked_equity
 from .backtester import BarEvaluator, EvaluationError, build_evaluator
+from .run_stats import headline_stats
+from .simulation_profile import build_profile
 from .ctx import StrategyContext, SymbolSeries, WeightContext
 from .risk_overlay import (
     CooldownState,
@@ -371,6 +373,11 @@ class PaperRunSupervisor:
         # two. Never allowed below a few polls, so a slow tick cannot lose it.
         self.lease_seconds = max(3 * self.poll_seconds, 60.0)
 
+    def _price_world(self) -> str | None:
+        """Configured market-data source id, or None (simulated / undeclared)."""
+        settings = getattr(self.app.state, "settings", None)
+        return getattr(settings, "market_data_source_id", None) or None
+
     # ---- management (called by routes / lifespan) ----
 
     def is_running(self, run_id: uuid.UUID) -> bool:
@@ -549,6 +556,66 @@ class PaperRunSupervisor:
                 )
                 await session.commit()
 
+    async def _record_run_stats(self, session, run: StrategyRun) -> None:
+        """Compute this run's headline stats from its equity curve (change A).
+
+        A paper run's curve is already persisted one point per processed day
+        (``_snapshot_equity``), so the stats are a read, not a new measurement.
+        Two things are deliberately *this* track's facts and not the shared
+        function's: the **baseline** is the run's first equity point (not the
+        account's opening balance — the account may have held positions before
+        the run started), and ``trade_count`` is the run's attributed fills.
+
+        Failure here never fails the stop: the run is already terminal, and a
+        stats error must not leave a stopped run looking active.
+        """
+        try:
+            points = await StrategyRunRepository(session).list_equity_points(run.id)
+            if not points:
+                return
+            equity = [p.equity for p in points]
+            trade_count = await StrategyRunRepository(session).count_fills_for_run(run.id)
+            stats = headline_stats(equity, equity[0], trade_count)
+            # The paper track does not track closed round trips; say so rather
+            # than omit the key (an omitted win_rate reads as "not computed",
+            # a null with a note reads as "not tracked here").
+            stats["win_rate"] = None
+            notes = list(stats.pop("notes", []))
+            notes.append(
+                "win_rate is null: the paper ledger does not track closed round "
+                "trips (it would need replayed cost basis per run)"
+            )
+            stats["notes"] = notes
+            await self._attach_extended_stats(run, [(p.date, p.equity) for p in points])
+            run.stats = stats
+        except Exception:  # noqa: BLE001 - never let stats break finalization
+            logger.warning("could not compute stats for run %s", run.id, exc_info=True)
+
+    async def _attach_extended_stats(self, run: StrategyRun, equity) -> None:
+        """Annualised stats from the compute plane, into ``run.stats``.
+
+        Reuses the backtest's ``extended_stats`` (same compute-plane calls, same
+        "insufficient points -> null + note" behaviour). Compute-plane
+        unavailability leaves the annualised fields null with a reason — the
+        run is not failed for it, matching the compute-plane module's rule that
+        the *backtest* path must fail rather than degrade, while a live run's
+        record stays honest instead of disappearing.
+        """
+        from .extended_stats import extended_stats
+
+        try:
+            extra = extended_stats(equity)
+        except Exception as exc:  # noqa: BLE001
+            extra = {"notes": [f"extended stats unavailable: {exc}"]}
+        stats = dict(run.stats or {})
+        stats.update({k: v for k, v in extra.items() if k != "notes"})
+        notes = stats.get("notes") or []
+        if extra.get("notes"):
+            notes = [*notes, *extra["notes"]]
+        if notes:
+            stats["notes"] = notes
+        run.stats = stats
+
     async def _finalize_stop(self, run_id: uuid.UUID) -> None:
         async with self.app.state.db.session_factory() as session:
             run = await session.get(StrategyRun, run_id)
@@ -566,6 +633,7 @@ class PaperRunSupervisor:
             run.stopped_at = datetime.now(UTC)
             run.runner_owner = None
             run.runner_lease_until = None
+            await self._record_run_stats(session, run)
             await self._event(
                 session, run, await self._user_id(session, run),
                 StrategyEventType.STATE_CHANGE, "run stopped",
@@ -583,6 +651,9 @@ class PaperRunSupervisor:
             run.error = str(exc)
             run.runner_owner = None
             run.runner_lease_until = None
+            # A crashed run still gets its measurable history: "it died" and
+            # "it died after losing 8%" are different facts.
+            await self._record_run_stats(session, run)
             await self._event(
                 session, run, await self._user_id(session, run),
                 StrategyEventType.ERROR, "run crashed", {"error": str(exc)},
@@ -660,6 +731,21 @@ class PaperRunSupervisor:
             strategy = await session.get(Strategy, run.strategy_id)
             if strategy is None:
                 raise EvaluationError(f"strategy {run.strategy_id} was deleted")
+            # Simulation profile (change add-paper-run-metrics): pinned once, at
+            # the first tick, so every creation path (route, recovery, tests that
+            # insert a run row directly) records the same rules — writing it only
+            # in the route would leave those runs unmodelled. Presence-checked so
+            # a run's profile never changes after the first tick.
+            if not (run.params or {}).get("simulation_profile"):
+                run.params = {
+                    **(run.params or {}),
+                    "simulation_profile": build_profile(
+                        cost_model=None,
+                        settlement="T+1",
+                        lot="whole_share",
+                        price_world=self._price_world(),
+                    ),
+                }
             user = await UserRepository(session).get_by_id(strategy.user_id)
             spec = validate_spec(strategy.spec)
             provider: MarketDataProvider = self.app.state.market_data_provider
@@ -877,7 +963,7 @@ class PaperRunSupervisor:
                     session, account, symbol, signal.side,
                     "LIMIT" if signal.limit_price is not None else "MARKET",
                     signal.quantity, signal.limit_price,
-                    strategy_run_id=run.id,
+                    strategy_run_id=run.id, trade_date=day,
                 )
             except OrderRejected as exc:
                 await self._event(
@@ -1435,7 +1521,7 @@ class PaperRunSupervisor:
                 order = await service.place_order(
                     session, account, instruction.symbol, instruction.side,
                     "MARKET", instruction.quantity,
-                    strategy_run_id=run.id,
+                    strategy_run_id=run.id, trade_date=day,
                 )
             except OrderRejected as exc:
                 await self._event(

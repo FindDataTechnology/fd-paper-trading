@@ -52,6 +52,8 @@ from ...strategy import (
     validate_spec,
 )
 from ...strategy.risk_overlay import RiskConfig
+from ...strategy.simulation_profile import build_profile
+from ...strategy.run_comparison import compare_runs, run_window
 from ...strategy.benchmarks import (
     DEFAULT_BENCHMARKS,
     BenchmarkResult,
@@ -139,6 +141,12 @@ def _strategy_out(strategy: Strategy) -> dict:
     except SpecValidationError:  # pragma: no cover - stored specs are validated
         out["spec_summary"] = "invalid spec"
     return out
+
+
+def _price_world(app) -> str | None:
+    """The configured market-data source id, or None when unset (simulated)."""
+    settings = getattr(app.state, "settings", None)
+    return getattr(settings, "market_data_source_id", None) or None
 
 
 def _weight_spec_or_none(strategy: Strategy) -> WeightSpec | None:
@@ -421,14 +429,8 @@ async def _replay_universe(app, spec, start: date, end: date, initial_cash: Deci
         if bars:
             _assert_no_lookahead([_bar_date(b).isoformat() for b in bars],
                                  end.isoformat(), where=f"symbol {symbol}")
-    if costs is not None and costs.enabled:
-        # 静默忽略一个显式开启的成本模型，等于给出一份"零成本"的结果而用户以为
-        # 含费——那正是本仓纪律禁止的沉默谎言。weight 轨的成本支持属
-        # strategy-weight-mode 变更范围，此处如实拒绝。
-        raise EvaluationError(
-            "the cost model is not yet supported on the weight (multi-symbol) track; "
-            "disable cost_model or run a single-symbol strategy"
-        )
+    # Cost model is supported on the weight track (change paper-fees-and-t1-settlement):
+    # the same fee arithmetic the single-symbol track and the ledger use.
     # 尽力而为的覆盖度记录：没有能力的 provider 记 coverage_checked=false，
     # 有能力的按标的记录指纹与缺口语义（design D4/D5）。休市段数照记不拒绝。
     coverage_record: dict = {}
@@ -439,6 +441,7 @@ async def _replay_universe(app, spec, start: date, end: date, initial_cash: Deci
         bars_by_symbol,
         initial_cash,
         risk=risk,
+        costs=costs,
         evaluate_code=build_weight_evaluator(spec),
         risk_thresholds=risk_thresholds,
         risk_sectors=risk_sectors,
@@ -456,6 +459,8 @@ def _record_weight_result(run: StrategyRun, result) -> None:
     run.weight_snapshots = [s.to_dict() for s in result.snapshots]
     run.data_gaps = result.data_gaps
     run.stats = result.stats
+    if result.cost_summary is not None:
+        run.cost_summary = result.cost_summary
 
 
 def _assert_no_lookahead(dates: list[str], as_of: str, *, where: str) -> None:
@@ -644,6 +649,7 @@ async def _run_backtest(app, run_id: uuid.UUID) -> None:
                     risk=wt_risk,
                 )
                 _record_weight_result(run, result)
+                run.cost_config = cost_model.to_dict() if cost_model.enabled else None
                 if result.risk_events:
                     # 判定随 run 留痕：触达了哪条判据、实际值多少。没有阈值时
                     # risk_events 为空 → 键不出现（"没判过"≠"判过且通过"）。
@@ -742,6 +748,15 @@ async def start_backtest(
         "end": payload.end.isoformat(),
         "initial_cash": str(payload.initial_cash),
     }
+    # simulation profile (change add-paper-run-metrics): pinned at creation so a
+    # later default change can't retroactively claim this run used other rules.
+    # cost=None is recorded as "mode: none" (modelled-and-zero), not as missing.
+    params["simulation_profile"] = build_profile(
+        cost_model=payload.cost_model,
+        settlement="T+1",
+        lot="whole_share",
+        price_world=_price_world(request.app),
+    )
     if payload.cost_model is not None:
         # 即使 enabled=false 也存快照：运行记录要能回答"这次用了什么成本配置"，
         # 而"用户显式关掉了成本"与"这个请求根本没有成本字段"是两个不同的事实。
@@ -856,6 +871,49 @@ async def get_strategy_run(
     return out
 
 
+@router.get("/strategy-runs/{run_id}/comparison/{other_run_id}")
+async def compare_strategy_runs(
+    run_id: uuid.UUID,
+    other_run_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Are these two runs the same experiment, and if so, how do they differ?
+
+    Incomparable is a first-class answer: ``comparable: false`` with one reason
+    per differing dimension, and ``stats: null``. Never a diff of two numbers
+    that were measured under different rules (design D6/D7).
+    """
+    run = await StrategyRunRepository(session).get_for_user(run_id, user.id)
+    other = await StrategyRunRepository(session).get_for_user(other_run_id, user.id)
+    if run is None or other is None:
+        raise APIError("not_found", "Strategy run not found", 404)
+    if run.strategy_id != other.strategy_id:
+        # Both resources exist; the *relationship* the caller asked about does
+        # not. 400, not 404 — saying "not found" would send them hunting for a
+        # run that is right there.
+        raise APIError(
+            "not_comparable",
+            "Both runs must belong to the same strategy to be compared",
+            400,
+        )
+
+    def _dates(points) -> list[date]:
+        return [p.date for p in points]
+
+    run_points = await StrategyRunRepository(session).list_equity_points(run.id)
+    other_points = await StrategyRunRepository(session).list_equity_points(other.id)
+    result = compare_runs(
+        run=run,
+        other=other,
+        run_window_=run_window(run, _dates(run_points)),
+        other_window=run_window(other, _dates(other_points)),
+        run_stats=run.stats,
+        other_stats=other.stats,
+    )
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Live paper runs
 # ---------------------------------------------------------------------------
@@ -916,6 +974,16 @@ async def start_paper_run(
             k: float(v) for k, v in
             payload.risk_thresholds.model_dump(exclude_none=True).items()
         }
+    # simulation profile pinned at start, same rule as the backtest route: what
+    # rules this run was simulated under, frozen so later config changes cannot
+    # rewrite it. Today the paper path models no fees and settles T+0; change B
+    # raises settlement to T+1 once the ledger supports it.
+    params["simulation_profile"] = build_profile(
+        cost_model=None,
+        settlement="T+1",
+        lot="whole_share",
+        price_world=_price_world(request.app),
+    )
     run = await StrategyRunRepository(session).create(
         StrategyRun(
             strategy_id=strategy.id,

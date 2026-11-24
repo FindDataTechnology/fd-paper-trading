@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import Settings, get_settings
 from ..marketdata import MarketDataProvider
 from ..persistence.models import Account, BalanceTransaction, OrderStatus
-from ..persistence.repositories import AccountRepository
+from ..persistence.repositories import AccountRepository, PositionLotRepository
 from ..valuation import marked_equity
 
 
@@ -116,6 +116,11 @@ class AccountService:
             if pos.quantity != 0:
                 account.cash_balance += pos.quantity * pos.avg_price
                 pos.quantity = Decimal("0")
+
+        # Clear every lot (change paper-fees-and-t1-settlement): a reset account
+        # that kept lots would have a sellable balance with no position behind it,
+        # and the next buy's T+1 gate would be measured against stale batches.
+        await PositionLotRepository(self.session).delete_for_account(account.id)
 
         target = (
             starting_balance if starting_balance is not None else account.starting_balance

@@ -44,6 +44,12 @@ export interface FillOut {
   price: string;
   side: string;
   ts: string;
+  // Per-fill cost and realized PnL. null = predates the columns; "0" = modelled
+  // and zero (the two are different facts).
+  commission: string | null;
+  stamp_tax: string | null;
+  slippage_cost: string | null;
+  realized_pnl: string | null;
 }
 
 export interface OrderOut {
@@ -344,7 +350,10 @@ export interface StrategyRunOut {
   account_id: string | null;
   status: StrategyRunStatus;
   params: Record<string, unknown> | null;
-  stats: Record<string, number> | null;
+  // Headline stats. Values may be null (an unmeasurable figure) and the object
+  // may carry a `notes: string[]` explaining any null — so this is not
+  // Record<string, number>. Paper runs now fill it (change add-paper-run-metrics).
+  stats: Record<string, number | string[] | null> | null;
   error: string | null;
   // 权重轨专用，单标的轨为 null：起跑时钉住的 universe、每次再平衡的快照
   // （目标/实际权重与缩放标记）、以及用过期收盘价估值的 (日期, 标的) 对。
@@ -363,9 +372,50 @@ export interface StrategyRunOut {
   param_grid: Record<string, number[]> | null;
   scan_results: ScanRow[] | null;
   in_sample: boolean | null;
+  // The rules this run was simulated under, pinned at creation. null = the run
+  // predates the field (unmodelled), distinct from {"cost":{"mode":"none"}}
+  // which means "costs were modelled and were zero".
+  simulation_profile: SimulationProfile | null;
   started_at: string | null;
   stopped_at: string | null;
   created_at: string;
+}
+
+export interface SimulationProfile {
+  cost: { mode: "none" | "modeled"; [k: string]: unknown };
+  settlement: string;
+  lot: string;
+  price_world: string;
+}
+
+export interface ComparisonReason {
+  dimension: string;
+  detail: string;
+}
+
+export interface RunComparison {
+  comparable: boolean;
+  reasons: ComparisonReason[];
+  window: {
+    self: { start: string; end: string } | null;
+    other: { start: string; end: string } | null;
+    overlap: { start: string; end: string } | null;
+  };
+  runs: { self: RunIdentity; other: RunIdentity };
+  // Present only when comparable: never a zero/empty diff for an
+  // incomparable pair (that would read as "measured, and identical").
+  stats: {
+    self: Record<string, number | null>;
+    other: Record<string, number | null>;
+    diff: Record<string, number | null>;
+  } | null;
+}
+
+export interface RunIdentity {
+  id: string;
+  mode: string | null;
+  strategy_version: number | null;
+  simulation_profile: SimulationProfile | null;
 }
 
 export interface EquityPointOut {

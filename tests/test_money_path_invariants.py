@@ -54,7 +54,10 @@ async def test_stop_trigger_respects_buying_power(
     (reserves 5,000). A gap to 60 makes the fill 6,000 — more cash than exists.
     """
     h = await auth_headers("alice@example.com")
-    aid = (await create_account(h, starting_balance=Decimal("5000"))).json()["id"]
+    # 5,050 not 5,000: placement now reserves the fee-inclusive amount at the
+    # stop price (100×50 = 5,000 + commission ≈ 5,001.25), so a bare 5,000 would
+    # be rejected at *placement* rather than at the gap trigger this test is about.
+    aid = (await create_account(h, starting_balance=Decimal("5050"))).json()["id"]
 
     # Posted directly: the shared `place_order` fixture has no stop_price.
     buy = await client.post(

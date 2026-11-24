@@ -104,10 +104,21 @@ def _bar(symbol: str, day: int, close: str) -> Bar:
 # ---------------------------------------------------------------------------
 
 
+from fd_paper_trading.execution.costs import CostModel
+
 async def _wire(app, provider: _UniverseProvider) -> _UniverseProvider:
-    """Point the app at the controlled provider and speed up the supervisor."""
+    """Point the app at the controlled provider and speed up the supervisor.
+
+    Zero-cost service on purpose: these tests exercise *runner mechanics* (which
+    orders, at which rebalance points, on which symbols), not cost accounting.
+    Fees are covered by ``test_weight_costs`` and the ledger tests. Charging here
+    would make "cash can afford two 50% buys of a 100k account" false by exactly
+    the commission, which is correct behaviour but not what this file measures.
+    """
     app.state.market_data_provider = provider
-    app.state.execution_service = PaperExecutionService(provider=provider)
+    app.state.execution_service = PaperExecutionService(
+        provider=provider, cost_model=CostModel(enabled=False)
+    )
     app.state.strategy_runner.poll_seconds = 0.01
     app.state.strategy_runner.lookback_bars = 250
     return provider

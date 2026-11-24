@@ -31,8 +31,14 @@ async def test_two_accounts_keep_independent_positions_and_cash(
     s2 = Decimal(
         str((await client.get(f"/api/v1/accounts/{a2}", headers=h)).json()["cash_balance"])
     )
-    assert abs(s1 - (Decimal("100000") - Decimal("10") * Decimal(str(o1["avg_fill_price"])))) < Decimal("0.01")
-    assert abs(s2 - (Decimal("100000") - Decimal("5") * Decimal(str(o2["avg_fill_price"])))) < Decimal("0.01")
+    # Cash debits notional plus the buy's commission (change
+    # paper-fees-and-t1-settlement); compare within a cent of the notional.
+    def _expected(qty, avg):
+        notional = Decimal(qty) * Decimal(str(avg))
+        return Decimal("100000") - notional - notional * Decimal("0.00025")
+
+    assert abs(s1 - _expected("10", o1["avg_fill_price"])) < Decimal("0.01")
+    assert abs(s2 - _expected("5", o2["avg_fill_price"])) < Decimal("0.01")
 
 
 async def test_cross_user_cannot_read_deposit_or_order(
