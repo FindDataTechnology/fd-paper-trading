@@ -53,6 +53,17 @@
 - **THEN** 返回 `comparable: false`，原因指明无重叠区间
 - **AND THEN** 不返回双方统计的并排
 
+### Requirement: 没有统计的运行不可比
+
+一次运行若没有头条统计（`FAILED`、仍在运行、或 `stats` 为空），它不是一次测量。比较双方任一方如此时，结果 SHALL 为 `comparable: false` 并在原因中指明是哪一个、其状态为何，MUST NOT 返回一张差值全为 null 的并排表——那会被读成"比较过且一致"。
+
+#### Scenario: 失败运行与成功运行相比
+
+- **WHEN** 比较一次 `COMPLETED` 运行与一次 `FAILED`（无 stats）运行
+- **THEN** 返回 `comparable: false`，原因维度为 `stats` 并点名失败的一方
+- **AND THEN** `stats` 为 null，不出现任何差值字段
+
+
 ### Requirement: 比较结果的可机读形状
 
 比较结果 SHALL 是结构化对象：`comparable`（布尔）、`reasons`（不可比时非空的原因数组，每项含维度与说明）、`window`（双方窗口与重叠区间）、`runs`（双方标识与画像）、`stats`（可比时的逐字段双方值与差值）。`reasons` 非空与 `comparable: true` MUST NOT 同时成立。

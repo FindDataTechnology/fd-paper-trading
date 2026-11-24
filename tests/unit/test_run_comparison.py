@@ -109,3 +109,21 @@ def test_different_versions_refused():
     r = compare_runs(run=a, other=b, run_window_=WINDOW, other_window=WINDOW,
                      run_stats={}, other_stats={})
     assert any(x["dimension"] == "strategy_version" for x in r["reasons"])
+
+
+def test_run_without_stats_is_refused_not_diffed_as_null():
+    """A FAILED/running run has no stats — comparing it must refuse, not emit an
+    all-null diff table (found by real e2e: COMPLETED vs FAILED came back
+    comparable with every diff null)."""
+    a = _Run(params={"start": "2026-01-01", "end": "2026-03-01",
+                     "initial_cash": "100000", "simulation_profile": PROFILE},
+             stats={"final_equity": 100000, "total_return": 0})
+    b = _Run(params={"start": "2026-01-01", "end": "2026-03-01",
+                     "initial_cash": "100000", "simulation_profile": PROFILE},
+             stats=None)  # FAILED
+    b.status = "FAILED"
+    r = compare_runs(run=a, other=b, run_window_=WINDOW, other_window=WINDOW,
+                     run_stats=a.stats, other_stats=b.stats)
+    assert r["comparable"] is False
+    assert r["stats"] is None
+    assert any(x["dimension"] == "stats" for x in r["reasons"])

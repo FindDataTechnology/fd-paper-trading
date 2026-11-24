@@ -111,6 +111,28 @@ def compare_runs(
     _compare_param(reasons, "initial_cash", run, other)
     _compare_profile(reasons, run, other)
 
+    # A run with no headline stats did not produce a measurement — a FAILED
+    # backtest, or one still running. Comparing it yields an all-null diff table,
+    # which reads as "measured, identical to nothing". That must be a refusal.
+    # (Found by real e2e: a COMPLETED run vs a FAILED run came back comparable
+    # with every diff null — exactly the "#reasons non-empty and comparable:true
+    # must not coexist" line this module is supposed to hold.)
+    self_missing = not _has_stats(run_stats)
+    other_missing = not _has_stats(other_stats)
+    if self_missing or other_missing:
+        who = []
+        if self_missing:
+            who.append(f"this run ({getattr(run, 'status', '?')})")
+        if other_missing:
+            who.append(f"the other run ({getattr(other, 'status', '?')})")
+        reasons.append({
+            "dimension": "stats",
+            "detail": (
+                "no headline statistics for " + " and ".join(who)
+                + "; a run without stats has no numbers to compare"
+            ),
+        })
+
     comparable = not reasons
     return {
         "comparable": comparable,
@@ -180,6 +202,16 @@ def _profile(run) -> Optional[dict]:
     params = getattr(run, "params", None) or {}
     profile = params.get("simulation_profile")
     return dict(profile) if isinstance(profile, Mapping) else None
+
+
+def _has_stats(stats: Mapping[str, Any] | None) -> bool:
+    """A run has usable stats when it recorded a non-empty stats mapping.
+
+    A FAILED or still-running run has ``stats`` null; a completed one has the
+    headline fields. Used to refuse comparisons where one side is not a
+    measurement at all, rather than emitting an all-null diff table.
+    """
+    return isinstance(stats, Mapping) and len(stats) > 0
 
 
 def _run_identity(run) -> dict:

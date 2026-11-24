@@ -111,3 +111,34 @@ async def test_comparison_of_two_identical_backtests_diffs(client, app):
     assert body["comparable"] is True
     assert body["reasons"] == []
     assert body["stats"]["diff"]["total_return"] == 0.0
+
+
+async def test_comparison_refuses_a_failed_run(app, client):
+    """A FAILED run has no stats; comparing it must refuse, not diff nulls.
+
+    Real-e2e regression (2026-11-24): a COMPLETED run vs a FAILED run came back
+    comparable:true with every diff null. The stats-presence gate now refuses it.
+    """
+    h = await _authed(client)
+    strat = await _make_strategy_row(client, h)
+    # A run that fails: window whose data does not cover it (stale/absent bars).
+    failed = await _new_backtest(client, h, str(strat["id"]), {
+        "start": "2026-01-01", "end": "2026-01-05", "initial_cash": "100000",
+    })
+    await _wait_terminal(client, h, str(failed["id"]))
+    good = await _new_backtest(client, h, str(strat["id"]), _window())
+    await _wait_terminal(client, h, str(good["id"]))
+
+    r = await client.get(
+        f"/api/v1/strategy-runs/{good['id']}/comparison/{failed['id']}", headers=h
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # Either the failed run never completed (no stats) → refused, or it somehow
+    # produced stats → then a real comparison. The point is: never comparable
+    # with null stats.
+    if not body["comparable"]:
+        assert body["stats"] is None
+        assert any(x["dimension"] == "stats" for x in body["reasons"])
+    else:
+        assert body["stats"]["other"].get("final_equity") is not None
