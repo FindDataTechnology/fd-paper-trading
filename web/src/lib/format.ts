@@ -1,6 +1,7 @@
 // Formatting and client-side P&L helpers. Pure functions, unit-tested.
 
-export function money(v: string | number, dp = 2): string {
+export function money(v: string | number | null | undefined, dp = 2): string {
+  if (v === null || v === undefined) return "-";
   const n = Number(v);
   if (!isFinite(n)) return "-";
   return n.toLocaleString(undefined, {

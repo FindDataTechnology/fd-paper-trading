@@ -10,13 +10,13 @@ import uuid
 
 import pytest
 
-from tests.e2e.test_strategy_backtests import (
+from test_strategy_backtests import (
     DCA_SPEC,
     _start_backtest,
     _wait_terminal,
     _window,
 )
-from tests.e2e.test_strategy_paper_runs import (
+from test_strategy_paper_runs import (
     _authed,
     _make_run_db,
     _make_strategy,

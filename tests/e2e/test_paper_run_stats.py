@@ -17,7 +17,7 @@ import uuid
 
 import pytest
 
-from tests.e2e.test_strategy_paper_runs import (
+from test_strategy_paper_runs import (
     _authed,
     _make_account,
     _make_run_db,

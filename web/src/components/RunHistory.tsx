@@ -215,7 +215,7 @@ function fmt(v: number | null, signed = false): string {
   return signed && v >= 0 ? `+${s}` : s;
 }
 
-/** Narrow a stats value (which may be a number, a notes array, or null). */
-function num(v: number | string[] | null | undefined): number | null {
+/** Narrow an optional numeric stat to number | null. */
+function num(v: number | null | undefined): number | null {
   return typeof v === "number" ? v : null;
 }

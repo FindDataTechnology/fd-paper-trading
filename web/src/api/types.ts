@@ -342,6 +342,24 @@ export interface ScanRow {
   stats: Record<string, number | null>;
 }
 
+export interface RunStats {
+  total_return?: number | null;
+  max_drawdown?: number | null;
+  sharpe?: number | null;
+  win_rate?: number | null;
+  trade_count?: number | null;
+  final_equity?: number | null;
+  annual_return?: number | null;
+  annual_volatility?: number | null;
+  sortino?: number | null;
+  calmar?: number | null;
+  turnover?: number | null;
+  // Reason(s) for any null above (e.g. paper runs do not track win_rate, or a
+  // one-point curve cannot be annualised). Kept off the numeric keys so a
+  // string[] never reaches pct()/money().
+  notes?: string[];
+}
+
 export interface StrategyRunOut {
   id: string;
   strategy_id: string;
@@ -350,10 +368,11 @@ export interface StrategyRunOut {
   account_id: string | null;
   status: StrategyRunStatus;
   params: Record<string, unknown> | null;
-  // Headline stats. Values may be null (an unmeasurable figure) and the object
-  // may carry a `notes: string[]` explaining any null — so this is not
-  // Record<string, number>. Paper runs now fill it (change add-paper-run-metrics).
-  stats: Record<string, number | string[] | null> | null;
+  // Headline stats. Numeric fields may be null (an unmeasurable figure — e.g.
+  // paper win_rate); `notes` explains any null. Declared precisely rather than
+  // as Record<string, number> so existing accessors (pct/money) stay typed
+  // number|null and a string[] can never leak into them.
+  stats: RunStats | null;
   error: string | null;
   // 权重轨专用，单标的轨为 null：起跑时钉住的 universe、每次再平衡的快照
   // （目标/实际权重与缩放标记）、以及用过期收盘价估值的 (日期, 标的) 对。
