@@ -3,7 +3,9 @@
 ## Purpose
 
 约束纸面账户域模型：多账户归属、开户初始资金（默认 10 万虚拟资金）、充值/重置语义与现金账本事务。
+
 ## Requirements
+
 ### Requirement: Multi-account ownership
 
 A user MAY own zero or more paper trading accounts. Each account SHALL be scoped to exactly one owning user and isolated from all other users' accounts. Each account SHALL have a unique simulated venue identifier of the form `PAPER-<12-hex>` and a currency (default `USD`).
@@ -54,11 +56,16 @@ A user MAY own zero or more paper trading accounts. Each account SHALL be scoped
 
 ### Requirement: Account reset
 
-`POST /api/v1/accounts/{id}/reset` SHALL cancel all open orders (setting status `CANCELLED` with reason `"account reset"`), flatten all positions at cost basis (returning each position's cost to cash with zero realized PnL), and restore `cash_balance` to the provided `starting_balance` (or the account's existing `starting_balance` if omitted). A `reset` `BalanceTransaction` SHALL be recorded.
+`POST /api/v1/accounts/{id}/reset` SHALL cancel all open orders (setting status `CANCELLED` with reason `"account reset"`), flatten all positions at cost basis (returning each position's cost to cash with zero realized PnL), clear every position lot for the account so no sellable or unsellable batch survives the reset, and restore `cash_balance` to the provided `starting_balance` (or the account's existing `starting_balance` if omitted). A `reset` `BalanceTransaction` SHALL be recorded.
 
 #### Scenario: Reset restores starting balance
 - **WHEN** a user resets an account (starting balance `100000`) after depositing `5000`
 - **THEN** `cash_balance` returns to `100000`
+
+#### Scenario: Reset clears position lots
+- **WHEN** a user resets an account holding positions bought across several days
+- **THEN** no position lot remains for that account
+- **AND THEN** a subsequent same-day buy is again unsellable until the next day
 
 ### Requirement: Per-user and per-account isolation
 
@@ -79,4 +86,3 @@ Every account, position, and order lookup SHALL filter by the requesting user's 
 #### Scenario: Empty positions and orders on a fresh account
 - **WHEN** a user lists positions and orders for a fresh account
 - **THEN** both responses are `200` with an empty array
-
