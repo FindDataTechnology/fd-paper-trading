@@ -3,7 +3,7 @@
 > **本文件由脚本生成，请勿手改** — 重跑 `python3 fd-paper-trading/scripts/e2e_weight_backtest.py` 覆盖。
 > 手改会在下次重跑时静默丢失，且报告与代码不再可对账。
 
-**数据**：4 只美股日线，来自价格通道 B 的权威库 `/Users/chengsishi/code/DAAS/daas.db`（只读，`scraw_*_daily`）。
+**数据**：4 只美股日线，来自价格通道 B 的权威库 `/Users/chengsishi/finddata/DAAS/daas.db`（只读，`scraw_*_daily`）。
 **策略**：等权 25% × 4，每 10 个交易日调仓，初始资金 100000。
 **窗口**：每只标的最近 200 根日线。
 

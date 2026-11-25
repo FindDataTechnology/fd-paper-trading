@@ -27,13 +27,16 @@ import sqlite3
 import sys
 from datetime import date, datetime, timezone
 from decimal import Decimal
+import os
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 #: The authoritative price DB (price channel B). Read-only, never written.
-PRICE_DB = Path("/Users/chengsishi/code/DAAS/daas.db")
+#: Overridable so the script does not rot when the workspace moves: the path
+#: below was `~/code/DAAS/daas.db`, which no longer exists (2026-11-25).
+PRICE_DB = Path(os.environ.get("FD_PRICE_DB", "/Users/chengsishi/finddata/DAAS/daas.db"))
 UNIVERSE = ["AAPL", "MSFT", "AMZN", "GOOGL"]
 INITIAL_CASH = Decimal("100000")
 #: Equal-weight, rebalanced every 10 trading days.

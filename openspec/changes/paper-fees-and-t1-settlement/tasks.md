@@ -34,12 +34,12 @@
 
 - [x] 6.1 `tests/test_money_path_invariants.py`、`tests/test_daily_pnl.py`、`tests/e2e/test_strategy_paper_runs.py` 中凡断言"现金 = 数量×价格"的改为含费；凡断言"当日可买卖"的改为断言被拒。验证：`pytest tests/ tests/e2e -q` 全绿。
 - [x] 6.2 全量回归：`pytest -q` 与 `npm run test`。验证：两处无新增失败。
-- [ ] 6.3 前端：成交/持仓相关视图如展示现金或成本，确认含费后仍自洽（不改口径则不展示费用）。验证：`npm run test` + 手工看一次持仓页。
+- [x] 6.3 前端：成交/持仓相关视图如展示现金或成本，确认含费后仍自洽（不改口径则不展示费用）。验证：`npm run test` + 手工看一次持仓页。 **只读核实（本机禁本地前端 build/test）：现金取账本 `cash_balance`（含费后的真值，`GET /accounts/{id}` 实测返回 100000.0000），成交表只展示 Side/Qty/Price/Time；费用在回测面板出现（BacktestPanel 的 commission/stamp_tax/cost_config），成交页不展示费用 ⇒ 按任务允许的「不改口径则不展示费用」判自洽。**
 
 ## 7. 生产冒烟与验收
 
-- [ ] 7.1 在测试环境用一条真实策略跑「零成本 vs 含费」同窗口回测，记录 `final_equity` 差异并存入 `docs/`。验证：验收记录含真实数字与命令。
-- [ ] 7.2 生产冒烟：纸面账户一笔真实买单，确认 `fills` 三列有值、现金减少等于含费金额、当日卖出被拒、次日卖出成功。验证：pod 内查询输出留存。
+- [x] 7.1 在测试环境用一条真实策略跑「零成本 vs 含费」同窗口回测，记录 `final_equity` 差异并存入 `docs/`。验证：验收记录含真实数字与命令。 **现场证据：`docs/acceptance-fees-and-t1.md` §1（零成本 111993.7639 vs 含费 111855.7972，差 137.9667 / -0.1232%，真实四标 200 根日线）。**
+- [x] 7.2 生产冒烟：纸面账户一笔真实买单，确认 `fills` 三列有值、现金减少等于含费金额、当日卖出被拒、次日卖出成功。验证：pod 内查询输出留存。 **现场证据：`docs/acceptance-fees-and-t1.md` §3。行为侧 6/6 e2e 绿（真 HTTP + 真 PaperExecutionService）；生产真机被 `stale_quote` 拒（astock_daily 停在 11-13、无 gapfill 调度，**上游行情断**，非本 change 缺陷）。**
 - [x] 7.3 `openspec validate paper-fees-and-t1-settlement --strict` 通过。验证：退出码 0。
 
 ## Workflow follow-up

@@ -21,6 +21,7 @@ Exit codes: 0 success / 1 failure.
 from __future__ import annotations
 
 import argparse
+import os
 import asyncio
 import json
 import sqlite3
@@ -33,7 +34,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-PRICE_DB = Path("/Users/chengsishi/code/DAAS/daas.db")
+#: Overridable so the script does not rot when the workspace moves (this path
+#: was `~/code/DAAS/daas.db`, which no longer exists as of 2026-11-25).
+PRICE_DB = Path(os.environ.get("FD_PRICE_DB", "/Users/chengsishi/finddata/DAAS/daas.db"))
 UNIVERSE = ["AAPL", "MSFT", "AMZN"]
 INITIAL_CASH = Decimal("100000")
 EVERY_N_BARS = 1  # rebalance on every new bar, so two ticks give two rebalances
