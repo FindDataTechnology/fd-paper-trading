@@ -20,6 +20,7 @@ import type {
   StrategyUpdate,
   BacktestRequest,
   PaperRunRequest,
+  ApiTokenOut,
 } from "./types";
 
 export const qk = {
@@ -323,5 +324,31 @@ export function useStopPaperRun() {
     mutationFn: (runId: string) =>
       api.post<StrategyRunOut>(`/strategy-runs/${runId}/stop`).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["strategy-runs"] }),
+  });
+}
+
+// ---- API tokens (the `fdt_` long-lived token an external client pastes) ----
+
+export function useApiTokens() {
+  return useQuery({
+    queryKey: ["api-tokens"],
+    queryFn: () => api.get<ApiTokenOut[]>("/tokens").then((r) => r.data),
+  });
+}
+
+export function useCreateApiToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) =>
+      api.post<ApiTokenOut>("/tokens", { name }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["api-tokens"] }),
+  });
+}
+
+export function useRevokeApiToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/tokens/${id}`).then(() => id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["api-tokens"] }),
   });
 }

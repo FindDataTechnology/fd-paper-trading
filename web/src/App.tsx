@@ -19,6 +19,7 @@ import OrderDetailPage from "./pages/OrderDetailPage";
 import InstrumentPage from "./pages/InstrumentPage";
 import StrategiesPage from "./pages/StrategiesPage";
 import StrategyDetailPage from "./pages/StrategyDetailPage";
+import TokensPage from "./pages/TokensPage";
 import MobileApp from "./mobile/MobileApp";
 
 const queryClient = new QueryClient({
@@ -63,6 +64,7 @@ function AppContent() {
         <Route path="instruments/:symbol" element={<InstrumentPage />} />
         <Route path="strategies" element={<StrategiesPage />} />
         <Route path="strategies/:strategyId" element={<StrategyDetailPage />} />
+        <Route path="settings/tokens" element={<TokensPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

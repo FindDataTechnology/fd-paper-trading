@@ -455,3 +455,13 @@ export interface StrategyRunDetailOut extends StrategyRunOut {
   equity_points: EquityPointOut[];
   events: StrategyEventOut[];
 }
+
+export interface ApiTokenOut {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  /** Plaintext is only present on the create response, never from list. */
+  token: string | null;
+}

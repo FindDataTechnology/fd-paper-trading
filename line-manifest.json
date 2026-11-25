@@ -1,7 +1,7 @@
 {
   "schema": "line-manifest/v1",
   "line": "paper-trading",
-  "public_base_url": "https://mcp.finddatatech.cloud/fd-paper-trading",
+  "public_base_url": "https://paper.finddatatech.cloud/fd-paper-trading",
   "identity": {
     "issuer": "https://auth.finddatatech.cloud/oidc",
     "jwks_uri": "https://auth.finddatatech.cloud/oidc/jwks",

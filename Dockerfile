@@ -21,6 +21,12 @@ COPY pyproject.toml uv.lock README.md LICENSE alembic.ini ./
 COPY line-manifest.json ./
 COPY src/ ./src/
 COPY alembic/ ./alembic/
+# The chain-probe reader CronJob (openspec: electrify-trading-chain) runs
+# scripts/check_paper_trading.py inside THIS image, because that gate imports
+# fd_paper_trading.* and therefore cannot run on a bare python. Shipping the
+# ~60KB of scripts beats inlining them into a ConfigMap: this repo's own audit
+# (2026-11-14) found 4 of 5 inlined copies had drifted from their repo source.
+COPY scripts/ ./scripts/
 COPY --from=webbuild /build/dist ./web/dist
 
 RUN uv sync --frozen --no-dev --no-install-project \

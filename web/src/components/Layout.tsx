@@ -32,6 +32,7 @@ export default function Layout() {
           </NavLink>
           <NavLink to="/orders">Orders</NavLink>
           <NavLink to="/strategies">Strategies</NavLink>
+          <NavLink to="/settings/tokens">API tokens</NavLink>
         </nav>
         <div style={{ flex: 1, minWidth: 220, maxWidth: 360 }}>
           <SymbolSearch />
