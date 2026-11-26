@@ -60,7 +60,11 @@ from ..persistence.repositories import (
     UserRepository,
 )
 from ..valuation import marked_equity
+from .._vendor.fd_quant import SUPPORTED_SCHEMA_VERSION
+from . import ledger_plane
 from .backtester import BarEvaluator, EvaluationError, build_evaluator
+from .ledger_identity import caller_header
+from .ledger_plane import LedgerUnavailable
 from .run_stats import headline_stats
 from .simulation_profile import build_profile
 from .ctx import StrategyContext, SymbolSeries, WeightContext
@@ -946,6 +950,7 @@ class PaperRunSupervisor:
         """
         service: PaperExecutionService = self.app.state.execution_service
         max_per_day = group_config(user, "max_orders_per_day")
+        ledger_outcomes: list[dict] = []
         for signal in ctx.signals:
             if placed >= max_per_day:
                 await self._event(
@@ -960,6 +965,11 @@ class PaperRunSupervisor:
                       "reason": f"daily order cap {max_per_day} reached"}],
                     self._verdict_for(run, day),
                 )
+                ledger_outcomes.append({
+                    "instruction": _signal_instruction(symbol, signal),
+                    "outcome": "capped", "order_id": None,
+                    "reason": f"daily order cap {max_per_day} reached",
+                })
                 continue
             try:
                 order = await service.place_order(
@@ -982,6 +992,11 @@ class PaperRunSupervisor:
                       "reason": exc.message}],
                     self._verdict_for(run, day),
                 )
+                ledger_outcomes.append({
+                    "instruction": _signal_instruction(symbol, signal),
+                    "outcome": "rejected", "order_id": None,
+                    "reason": exc.message,
+                })
                 continue
             placed += 1
             await self._record_order_intents(
@@ -990,11 +1005,24 @@ class PaperRunSupervisor:
                   "outcome": "placed", "order_id": order.id}],
                 self._verdict_for(run, day),
             )
+            ledger_outcomes.append({
+                "instruction": _signal_instruction(symbol, signal),
+                "outcome": "placed", "order_id": order.id,
+            })
             await self._event(
                 session, run, strategy.user_id, StrategyEventType.ORDER,
                 f"placed {signal.side} {signal.quantity} {symbol}",
                 {"order_id": str(order.id), "status": order.status,
                  "order_type": order.order_type},
+            )
+        # 决策账本（spec `paper-run-decision-ledger`）：每个成为真实决策的信号
+        # （下出/被拒/被截）以 Rating 落进该用户的账本；跳过的信号不落账
+        # （design D5）。失败留痕不阻断（design D4）。
+        if ledger_outcomes:
+            await self._record_decisions(
+                session, run, user, day,
+                [self._rating_record_args(run, day, symbol, o)
+                 for o in ledger_outcomes],
             )
         return placed
 
@@ -1301,6 +1329,22 @@ class PaperRunSupervisor:
         await self._record_order_intents(
             session, run, account, day, outcomes, verdict,
         )
+        # 决策账本（spec `paper-run-decision-ledger`，design D3–D6）：调仓点有了
+        # 真实指令（下出/被拒/被截）就把这份目标权重以 TargetWeights 契约实例落进
+        # 该 run 所属用户的账本。全部指令被跳过（无价格/零数量）的调仓点没有发生
+        # 决策，不落账（design D5）。失败留痕不阻断（design D4：账本是留痕，不是
+        # 交易的一部分——与意图票同一纪律）。
+        if outcomes:
+            ref, reason = await self._ledger_series_ref(
+                provider, universe[0], day, bars_by_symbol.get(universe[0]) or [],
+            )
+            await self._record_decisions(
+                session, run, user, day,
+                [self._portfolio_record_args(
+                    run, spec, day, universe, target_symbols, snapshot.cash_floor, ref,
+                )],
+                extra={"series_ref_unavailable": reason} if reason else None,
+            )
         await self._event(
             session, run, strategy.user_id, StrategyEventType.REBALANCE,
             f"rebalance {day.isoformat()}: {len(target_symbols)} target symbol(s), "
@@ -1648,6 +1692,164 @@ class PaperRunSupervisor:
         except Exception:  # noqa: BLE001 - 出票是留痕，绝不让交易 tick 失败
             logger.warning("order intent write failed for run %s on %s", run.id, day,
                            exc_info=True)
+
+    # ---- 决策账本（spec `paper-run-decision-ledger`，design D1–D6）-----------
+
+    async def _record_decisions(self, session, run: StrategyRun, user: User,
+                                day: date, records: Sequence[dict],
+                                extra: Mapping | None = None) -> None:
+        """把本次决策点的落账清单送进该用户的决策账本。
+
+        **纪律（design D4，与 `_record_order_intents` 同源）**：
+
+        1. **尽力而为**：每条记录单独尝试；账本不可用/被拒/未配身份，都计为
+           failed 并把原因写进 `run.params["ledger"].last_error`——绝不静默丢弃，
+           也**绝不回滚本 tick 已成交的订单**（账本是留痕，不是交易的一部分）。
+        2. **身份由服务现签**（design D2）：caller_header 由 `ledger_identity`
+           按该 run 所属用户现签；密钥未配时账本面会拒发无头请求（不冒充匿名），
+           每条记录计为 `no_identity_key` 失败。
+        3. **双计数可查**：全部尝试后写 `run.params["ledger"] =
+           {attempted, created, failed, last_error}`；任何失败发一条运行事件。
+
+        `records` 每项是 `ledger_plane.record_decision` 的 kwargs（不含
+        caller_header，由这里统一注入）；`extra` 是附进 params 的可机读标注
+        （如 `series_ref_unavailable`，design D6）。
+        """
+        ledger: dict = {"attempted": 0, "created": 0, "failed": 0, "last_error": None}
+        header = caller_header(user)
+        for args in records:
+            ledger["attempted"] += 1
+            call = {**args, "caller_header": header}
+            try:
+                await asyncio.to_thread(lambda c=call: ledger_plane.record_decision(**c))
+                ledger["created"] += 1
+            except LedgerUnavailable as exc:
+                ledger["failed"] += 1
+                ledger["last_error"] = str(exc)
+        if records or extra:
+            run.params = {
+                **(run.params or {}),
+                "ledger": {**ledger, **(extra or {})},
+            }
+        if ledger["failed"]:
+            await self._event(
+                session, run, user.id, StrategyEventType.ERROR,
+                f"decision ledger: {ledger['failed']}/{ledger['attempted']} "
+                f"record(s) failed"
+                + (f": {ledger['last_error']}" if ledger["last_error"] else ""),
+                {"date": day.isoformat(),
+                 "attempted": ledger["attempted"], "failed": ledger["failed"],
+                 "last_error": ledger["last_error"]},
+            )
+
+    async def _ledger_series_ref(
+        self, provider: MarketDataProvider, symbol: str, day: date,
+        bars: Sequence,
+    ) -> tuple[dict | None, str | None]:
+        """决策记录的价格序列出处：(ref, None) 或 (None, reason)（design D6）。
+
+        出处取 provider 自己的覆盖事实——`get_bars_with_coverage` 返回的
+        `series_ref` 就是 `series_ref.py::build_series_ref` 的产物（口径、锚点、
+        水位由声明与 provider 定）。runner 不用碎片**再拼一份** ref：第二份口径
+        来源必然漂移，而"研报/回测/账本三路不可比"正是第二份口径造成的。
+        provider 没有覆盖能力（simulated 等）时说明原因，不造 ref。
+        """
+        checker = getattr(provider, "get_bars_with_coverage", None)
+        if checker is None:
+            return None, "provider_declares_no_series_ref"
+        start = _bar_date(bars[0]) if bars else day
+        try:
+            coverage = await checker(symbol, start, day)
+        except Exception as exc:  # noqa: BLE001 - 出处不可得不是交易失败
+            return None, f"coverage_probe_failed: {exc}"
+        ref = coverage.get("series_ref")
+        if ref:
+            return ref, None
+        return None, coverage.get("series_ref_unavailable") or "no_series_ref"
+
+    def _portfolio_record_args(self, run: StrategyRun, spec: WeightSpec, day: date,
+                               universe: Sequence[str], weights: Mapping[str, float],
+                               cash_floor: float, series_ref: dict | None) -> dict:
+        """权重轨调仓点的账本记录（design D3/D5）。
+
+        账本契约：`record_kind="portfolio"` 的 payload 是 `PortfolioIntent`，
+        TargetWeights 契约实例走专用 `target_weights` 槽位——两者都带同一份
+        权重（run 自己的目标）。`derived_from` 指向该 run（账本"出处必填"的
+        硬规则）；`rules.kind` 取契约允许的最近声明（equal_weight）——策略
+        自己的权重派生方式不在契约的三类之内，真正的派生出处是 derived_from
+        指向的 run 本身，rationale 写明这一点。
+        """
+        producer = {"pack": "fd-paper-trading", "skill": "strategy-runner",
+                    "run_id": str(run.id)}
+        tw = {
+            "schema_version": SUPPORTED_SCHEMA_VERSION,
+            "as_of": day.isoformat(),
+            "universe": list(universe),
+            "weights": {s: float(w) for s, w in weights.items()},
+            "cash_floor": float(cash_floor),
+            "producer": producer,
+        }
+        payload = {
+            **tw,
+            "rules": {"kind": "equal_weight", "cash_floor": float(cash_floor)},
+            "derived_from": [f"strategy_run:{run.id}"],
+            "rebalance": {"every_n_bars": spec.rebalance.every_n_bars},
+            "rationale": (
+                f"target weights of live paper run {run.id}; the run's own "
+                f"evaluator produced them (see derived_from)"
+            ),
+        }
+        args = {
+            "as_of": day.isoformat(),
+            "pack": "fd-paper-trading",
+            "skill": "strategy-runner",
+            "record_kind": "portfolio",
+            "portfolio_key": f"strategy_run:{run.id}",
+            "payload": payload,
+            "target_weights": tw,
+        }
+        if series_ref is not None:
+            args["series_ref"] = series_ref
+        return args
+
+    def _rating_record_args(self, run: StrategyRun, day: date, symbol: str,
+                            outcome: Mapping) -> dict:
+        """单标的轨的账本记录：每个成为真实决策的信号一条 Rating（design D5）。
+
+        `side` 由信号的 BUY/SELL 映射为契约的 buy/sell；conviction/price_target
+        为 null（策略信号不带评级语义，编一个就是造假）。出处写在
+        `producer.run_id`——Rating 契约没有 derived_from 字段，这是它唯一的
+        run 标识槽位。
+        """
+        instruction = outcome["instruction"]
+        side = instruction.side.lower()
+        reason = outcome.get("reason")
+        basis = (
+            f"strategy run {run.id} {outcome['outcome']} {side} "
+            f"{instruction.quantity} {symbol}"
+            + (f" ({reason})" if reason else "")
+        )
+        return {
+            "as_of": day.isoformat(),
+            "pack": "fd-paper-trading",
+            "skill": "strategy-runner",
+            "record_kind": "single",
+            "symbol": symbol,
+            "payload": {
+                "schema_version": SUPPORTED_SCHEMA_VERSION,
+                "as_of": day.isoformat(),
+                "subject": symbol,
+                "side": side,
+                "conviction": None,
+                "price_target": None,
+                "target_evidence_ids": [],
+                "basis": basis,
+                "evidence": [],
+                "producer": {"pack": "fd-paper-trading",
+                             "skill": "strategy-runner",
+                             "run_id": str(run.id)},
+            },
+        }
 
     async def _snapshot_weight_equity(
         self, session, run: StrategyRun, provider: MarketDataProvider, account,

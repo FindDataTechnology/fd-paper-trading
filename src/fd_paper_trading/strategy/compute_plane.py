@@ -93,11 +93,14 @@ def call_tool(
     base_url: Optional[str] = None,
     timeout: float = DEFAULT_TIMEOUT,
     transport: Optional[httpx.BaseTransport] = None,
+    extra_headers: Optional[Mapping[str, str]] = None,
 ) -> dict:
     """调用计算面一个工具，返回其 dict 结果。
 
     `transport` 供测试注入（`httpx.MockTransport`），使"计算面正常/不可用/返回
     错误"三条路径都能在无网络环境下被测到——否则这类错误分支只能靠线上事故发现。
+    `extra_headers` 供同协议的其他调用方（账本面的验签身份头）复用这份握手而不
+    必复制它——协议实现只有这一份。
     """
     url = base_url or endpoint()
     headers = {
@@ -107,6 +110,8 @@ def call_tool(
     token = endpoint_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    if extra_headers:
+        headers = {**headers, **extra_headers}
     try:
         # trust_env=False：不让 httpx 读取环境/系统代理配置。计算面是**内网**
         # 服务（本机开发端口或集群内 service 名），走代理必然失败——而失败形态
