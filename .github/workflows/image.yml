@@ -14,3 +14,8 @@ jobs:
     with:
       image: fd-paper-trading
       namespace: finddata
+      # 本镜像 entrypoint.sh 是 `set -euo pipefail` + `alembic upgrade head` + exec 服务：
+      # 迁移跑不动 ⇒ 启动即退出。此前没配烟雾，「构建 success」只等于 docker build 过了
+      # （同族缺陷 2026-11-26 在 fd-erp-ledger-mcp 真炸过：构建绿、生产 CrashLoop 33h）。
+      # 脚本起一次性 PG、用镜像真跑 entrypoint、再断言 alembic_version 非空。
+      smoke_script: bash scripts/ci-smoke.sh
