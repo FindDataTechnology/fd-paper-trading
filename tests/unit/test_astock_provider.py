@@ -47,14 +47,30 @@ class FakeReader:
         self.calls.append((sql, args))
         s = " ".join(sql.split())
         if s.startswith("select id, code, verified from concepts"):
-            return list(STOCK_CONCEPTS) if args[0] == "stock" else []
+            if args[0] == "stock":
+                return list(STOCK_CONCEPTS)
+            if args[0] == "index":
+                # a benchmark's family: same shape, its own concept ids
+                return [{"id": cid, "code": code, "verified": True}
+                        for code, cid in (("price.close", 3938), ("price.open", 3939),
+                                          ("price.high", 3940), ("price.low", 3941),
+                                          ("price.volume", 3942), ("price.amount", 3943))]
+            return []
         if s.startswith("select id, code from entities"):
             # calendar reference basket lookup
             if self.refs is None:
                 return [{"id": 3084, "code": "600000"}, {"id": 3087, "code": "600036"}]
             return [{"id": i, "code": c} for c, i in self.refs.items()]
         if s.startswith("select id, entity_type from entities"):
-            return list(self.entities.get(args[0], []))
+            rows = list(self.entities.get(args[0], []))
+            # Honour the query's own ORDER BY: extract the `case entity_type when
+            # 'x' then N` ranks so a test can prove the provider asked for an order
+            # (a fixture returning insertion order would pass either way).
+            import re as _re
+            ranks = dict(_re.findall(r"when '(\w+)' then (\d+)", s))
+            if ranks:
+                rows.sort(key=lambda r: (int(ranks.get(r["entity_type"], 9)), r["id"]))
+            return rows
         if s.startswith("select max(date) as d from semantic_observations_all"):
             # 自证水位那条：返回本源最后一根 bar 的日期（夹具里就是 bars 的最大日期）
             dates = sorted(str(r["date"])[:10] for r in self.bars) if self.bars else []
@@ -162,6 +178,29 @@ async def test_artifact_rows_are_dropped():
 async def test_unknown_symbol_is_gap_not_error():
     p = _provider(FakeReader())
     assert await p.get_daily_bars("999999", "2026-01-01", "2026-01-31") == []
+
+
+async def test_suffixed_benchmark_resolves_index_not_the_colliding_stock():
+    """`000905` is two things: a Shenzhen STOCK (厦门港务) and the Shanghai 中证500
+    INDEX. Default benchmarks are written `000905.SS`, and the `.SS` means Shanghai —
+    an exchange the stock is not listed on. Before 2026-11-26 the suffix was dropped
+    and the stock always won, so benchmark comparison silently read a ~8.02 quote
+    instead of ~5900 (measured in production).
+
+    Bare `000905` keeps the old preference (stock first); only the suffixed form
+    flips it, so nothing about single-symbol stock trading changes.
+    """
+    reader = FakeReader()
+    reader.entities = {"000905": [{"id": 2682, "entity_type": "stock"},
+                                  {"id": 10263, "entity_type": "index"}]}
+    reader.entities_with_data = {2682, 10263}
+    p = _provider(reader)
+
+    got = await p._resolve_entity("000905.SS")
+    assert got == (10263, "index"), f"suffixed benchmark must resolve the index, got {got}"
+
+    bare = await p._resolve_entity("000905")
+    assert bare == (2682, "stock"), f"bare code keeps stock-first, got {bare}"
 
 
 async def test_index_symbol_without_rows_is_gap():

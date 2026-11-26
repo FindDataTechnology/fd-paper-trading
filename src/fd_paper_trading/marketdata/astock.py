@@ -453,12 +453,25 @@ class AstockMarketDataProvider(MarketDataProvider):
         )
         return ref
 
+    @staticmethod
+    def _cache_key(code: str, suffix: str | None) -> str:
+        """Cache key that keeps the venue flavour when it changes the answer.
+
+        `000905` is a Shenzhen stock; `000905.SS` is the Shanghai 中证500 index.
+        Keying by the bare code made whichever resolved first answer for both
+        (2026-11-26: benchmark comparison read a stock quote). Codes that cannot
+        flip (a `.SS` on `600519`) keep the plain key, so the cache does not gain
+        entries for suffixes that change nothing.
+        """
+        shanghai = (suffix or "") in ("SH", "SS")
+        return f"{code}.sh" if (shanghai and code.startswith("000")) else code
+
     def _entity_type_of(self, symbol: str) -> str | None:
         """已解析过的符号的实体类型（未解析/解析不出 ⇒ None）。"""
         norm = normalize_symbol(symbol)
         if norm is None:
             return None
-        cached = self._entity_cache.get(norm[0])
+        cached = self._entity_cache.get(self._cache_key(norm[0], norm[1]))
         if not cached or cached[0] == -1:
             return None
         return cached[1]
@@ -523,15 +536,27 @@ class AstockMarketDataProvider(MarketDataProvider):
         if norm is None:
             return None
         code = norm[0]
-        cached = self._entity_cache.get(code)
+        key = self._cache_key(code, norm[1])
+        cached = self._entity_cache.get(key)
         if cached is not None:
             return None if cached[0] == -1 else cached
+
+        # A `.SH`/`.SS` suffix means Shanghai. `000905` as a STOCK is a Shenzhen
+        # listing (厦门港务) while 中证500 is a Shanghai INDEX — same six digits,
+        # opposite exchanges. Default benchmarks are written `000905.SS`, so
+        # honouring the suffix is what makes a benchmark request resolve to the
+        # index instead of silently returning the stock's 8.02 quote (measured
+        # 2026-11-26: benchmark comparison was reading a 厦门港务 price).
+        # Without a suffix the historical preference stands: stock first.
+        shanghai = norm[1] in ("SH", "SS")
+        order = ("index", "stock", "fund") if shanghai and code.startswith("000") \
+            else ("stock", "index", "fund")
+        type_rank = " ".join(f"when '{t}' then {i}" for i, t in enumerate(order))
 
         rows = await self._fetch(
             "select id, entity_type from entities "
             "where code = $1 and entity_type = any($2::text[]) "
-            "order by case entity_type when 'stock' then 0 "
-            "when 'index' then 1 else 2 end, id asc "
+            f"order by case entity_type {type_rank} else 9 end, id asc "
             "limit 6",
             code,
             list(_ENTITY_TYPES),
@@ -559,9 +584,9 @@ class AstockMarketDataProvider(MarketDataProvider):
                 chosen = (int(r["id"]), etype)
                 break
         if chosen is None:
-            self._entity_cache[code] = (-1, "")
+            self._entity_cache[key] = (-1, "")
             return None
-        self._entity_cache[code] = chosen
+        self._entity_cache[key] = chosen
         return chosen
 
     # ---- bars ----
