@@ -21,8 +21,13 @@ APP="smokeapp-$$"
 cleanup() { docker rm -f "$APP" "$PG" >/dev/null 2>&1 || true; docker network rm "$NET" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-echo "== 1. 入口可执行 =="
-docker run --rm --entrypoint fd-paper-trading "$IMG" --help >/dev/null
+# 注意：本镜像的 console script 只装在 /app/.venv 里（Dockerfile `uv sync
+# --no-install-project` + `uv sync`），**不在 PATH 上**——2026-11-26 第一次跑
+# 就红在 `exec: "fd-paper-trading": executable file not found`。所以第 1 步不能
+# 调它；要验的本来也不是「命令存在」，而是「entrypoint 能不能跑通 alembic 并起服务」，
+# 那正是第 2/3 步用默认 ENTRYPOINT 做的事。
+echo "== 1. 镜像的入口脚本在 =="
+docker run --rm --entrypoint sh "$IMG" -c 'test -x /app/entrypoint.sh && echo entrypoint-ok'
 
 echo "== 2. 一次性 Postgres =="
 docker network create "$NET" >/dev/null
