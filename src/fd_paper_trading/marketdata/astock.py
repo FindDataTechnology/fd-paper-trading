@@ -884,7 +884,11 @@ class AstockMarketDataProvider(MarketDataProvider):
         end = date.today()
         start = end - timedelta(days=_QUOTE_LOOKBACK_DAYS)
         try:
-            out = await self._query_bars(code, start.isoformat(), end.isoformat())
+            # Pass the SYMBOL, not the bare code: the suffix decides whether
+            # `000905.SS` is the Shanghai index or the Shenzhen stock of that code
+            # (2026-11-26 — dropping it here made the quote path disagree with
+            # `_resolve_entity`, which reads the suffix correctly).
+            out = await self._query_bars(symbol, start.isoformat(), end.isoformat())
         except Exception:  # noqa: BLE001
             logger.exception("get_quote: store read failed for %s", symbol)
             return None

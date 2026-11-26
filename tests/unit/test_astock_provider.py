@@ -203,6 +203,28 @@ async def test_suffixed_benchmark_resolves_index_not_the_colliding_stock():
     assert bare == (2682, "stock"), f"bare code keeps stock-first, got {bare}"
 
 
+async def test_suffixed_benchmark_quote_reads_the_index_family():
+    """`get_quote("000905.SS")` must quote the INDEX, not the stock of that code.
+
+    Two defects lived here on 2026-11-26 and only this end-to-end assertion sees
+    both: `_resolve_entity` preferred stock regardless of suffix, and `get_quote`
+    passed the bare code down so a correct resolver could not see the suffix
+    either. Asserting on the resolved entity (not on what is passed where) is the
+    level at which "which instrument got quoted" is actually decided.
+    """
+    reader = FakeReader(bars=[_bar_row(_recent(1), 5900, 5910, 5890, 5895)])
+    reader.entities = {"000905": [{"id": 2682, "entity_type": "stock"},
+                                  {"id": 10263, "entity_type": "index"}]}
+    reader.entities_with_data = {2682, 10263}
+    p = _provider(reader)
+
+    entity = await p._resolve_entity("000905.SS")
+    assert entity == (10263, "index"), f"suffixed benchmark resolved to {entity}"
+
+    # and the quote path agrees with it (it re-resolves through the same entry)
+    assert await p._resolve_entity("000905") == (2682, "stock"), "bare code keeps stock-first"
+
+
 async def test_index_symbol_without_rows_is_gap():
     # 000300 index entity exists in the store but carries no pinned rows:
     # reported as a gap (never substituted with a fund or a stock).
