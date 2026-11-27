@@ -148,6 +148,23 @@ def assert_summary(token: str, account: str) -> dict:
     return body
 
 
+def reset_account(token: str, account: str) -> bool:
+    """把演示账户清回起始状态。
+
+    为什么必须清：这条链每轮真下一单，持仓会一路累积（2026-11-27 实测跑到 1,200 股）。
+    演示账户一旦堆满历史成交，客户点开看到的是「别人的旧账」，不是一个干净的样板。
+    清账是**尽力而为**：失败不改变本轮判词（链本身已经走通了），只在输出里如实标注——
+    否则「清理失败」会被误读成「演示不可用」。
+    """
+    step("重置账户（保持演示干净）")
+    try:
+        call("POST", f"/api/v1/accounts/{account}/reset", token=token, body={}, expect=200)
+        return True
+    except (StepFailed, Unreachable) as exc:
+        print(f"  ! 重置失败（不影响本轮判词）：{exc}", file=sys.stderr)
+        return False
+
+
 def run() -> int:
     if not BASE or not EMAIL or not PASSWORD:
         print("not_configured：缺 PAPER_BASE_URL / PAPER_DEMO_EMAIL / PAPER_DEMO_PASSWORD", file=sys.stderr)
@@ -159,6 +176,8 @@ def run() -> int:
         order = place_order(token, account)
         pos = assert_position(token, account)
         summary = assert_summary(token, account)
+        # 断言都过了才清账：清完再断言就测不到「下单真的留下了痕迹」
+        reset_ok = reset_account(token, account) if not os.environ.get("PAPER_DEMO_KEEP_STATE") else False
     except StepFailed as exc:
         print(f"FAIL: {exc}", file=sys.stderr)
         return FAIL
@@ -173,6 +192,7 @@ def run() -> int:
         "avg_fill_price": order.get("avg_fill_price"),
         "position_qty": pos.get("quantity"),
         "open_positions": summary.get("open_positions"),
+        "account_reset": reset_ok,
         "url": f"{BASE}/",
     }, ensure_ascii=False))
     return PASS
@@ -201,6 +221,8 @@ def self_test() -> int:
     chk("无 fills 被拒", rejects(_check_order, {"status": "FILLED", "avg_fill_price": "5.7", "fills": []}) is not None)
     chk("正常订单通过", rejects(_check_order, {"status": "FILLED", "avg_fill_price": "5.7", "fills": [1]}) is None)
     chk("退出码四态互异", sorted({PASS, FAIL, NOT_CONFIGURED, UNREACHABLE}) == [0, 1, 2, 3])
+    chk("默认会重置账户（PAPER_DEMO_KEEP_STATE 未设）",
+        not os.environ.get("PAPER_DEMO_KEEP_STATE"))
     chk("默认跑公网域名（非 ClusterIP）", BASE.startswith("https://") and "finddatatech.cloud" in BASE)
 
     bad = [n for n, ok in arms if not ok]
