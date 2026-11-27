@@ -200,23 +200,48 @@ def run() -> int:
         err, text, payload = mcp.call("place_order", {
             "account_id": account, "symbol": SYMBOL, "side": "BUY",
             "order_type": "MARKET", "quantity": QTY})
+        if err and payload is None and text:
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                payload = None
         if err:
-            raise StepFailed(f"place_order 报错：{text[:300]}")
-        order = (payload or {}).get("order") if isinstance(payload, dict) else None
-        if not isinstance(order, dict):
+            # **配额耗尽不是链断**：这条探针每跑一次就消耗一笔日配额，跑数次后必然
+            # 打满；把它判成「演示不可用」会让这条链在一天里的大部分时间假红。
+            # 与 edge-probe 的「不可观测≠服务坏」同族：这是**被观察对象的容量状态**。
+            if isinstance(payload, dict) and payload.get("code") == "daily_order_cap":
+                print(f"  ! 日下单配额已满（{payload.get('message')}）——跳过下单断言，"
+                      f"不判失败：这是容量状态，不是链断", file=sys.stderr)
+                err = False
+                payload = {"capped": True}
+            else:
+                raise StepFailed(f"place_order 报错：{text[:300]}")
+        # 服务端把**业务失败**也当正常结果返回（isError=false，body 里带 error/code）。
+        # 所以「拿到一条 error 对象」与「拿到 order」必须分开看，不能靠 isError 判。
+        if isinstance(payload, dict) and payload.get("code") == "daily_order_cap":
+            print(f"  ! 日下单配额已满（{payload.get('message')}）——跳过成交断言，"
+                  f"不判失败：这是容量状态，不是链断", file=sys.stderr)
+            capped = True
+            order = {"status": "CAPPED", "id": None, "avg_fill_price": None}
+        else:
+            capped = False
+            order = (payload or {}).get("order") if isinstance(payload, dict) else None
+        if not capped and not isinstance(order, dict):
             raise StepFailed(f"place_order 无 order 对象：{(text or '')[:300]}")
-        if order.get("status") != "FILLED":
-            raise StepFailed(f"订单未成交：status={order.get('status')} reason={order.get('reject_reason')}")
-        px = order.get("avg_fill_price")
-        if not px or float(px) <= 0:
-            raise StepFailed(f"成交价非法：{px!r}——没有真实价格就不算成交")
+        px = None
+        if not capped:
+            if order.get("status") != "FILLED":
+                raise StepFailed(f"订单未成交：status={order.get('status')} reason={order.get('reject_reason')}")
+            px = order.get("avg_fill_price")
+            if not px or float(px) <= 0:
+                raise StepFailed(f"成交价非法：{px!r}——没有真实价格就不算成交")
 
         step("tools/call list_positions")
         err2, text2, pos = mcp.call("list_positions", {"account_id": account})
         if err2:
             raise StepFailed(f"list_positions 报错：{text2[:200]}")
         rows = pos if isinstance(pos, list) else (pos or {}).get("positions") if isinstance(pos, dict) else []
-        if not any(isinstance(p, dict) and p.get("symbol") == SYMBOL for p in (rows or [])):
+        if not capped and not any(isinstance(p, dict) and p.get("symbol") == SYMBOL for p in (rows or [])):
             raise StepFailed(f"成交后持仓里没有 {SYMBOL}")
 
         step("复位演示账户")
@@ -236,6 +261,7 @@ def run() -> int:
         "result": "pass", "transport": "mcp", "account_id": account,
         "order_id": order.get("id"), "status": order.get("status"),
         "avg_fill_price": px, "tools": len(names), "account_reset": reset_ok,
+        "daily_cap_hit": capped,
         "url": BASE + "/",
     }, ensure_ascii=False))
     return PASS
@@ -268,12 +294,30 @@ def self_test() -> int:
     chk("退出码四态互异", sorted({PASS, FAIL, NOT_CONFIGURED, UNREACHABLE}) == [0, 1, 2, 3])
     chk("默认跑公网 https（非 mesh 内网）", BASE.startswith("https://") and "finddatatech.cloud" in BASE)
     chk("token 不来自环境变量（现场铸）", not os.environ.get("PAPER_DEMO_TOKEN"))
+    # 日配额不是链断：判据必须能把它与「真的坏了」分开，否则一天里多数时间假红
+    try:
+        _assert_not_capped({"error": True, "code": "daily_order_cap"})
+        arms.append(("日配额被识别为容量态（跳过而非失败）", True))
+    except StepFailed:
+        arms.append(("日配额被识别为容量态（跳过而非失败）", False))
+    try:
+        _assert_not_capped({"error": True, "code": "insufficient_buying_power"})
+        arms.append(("其他业务错误仍判失败", False))
+    except StepFailed:
+        arms.append(("其他业务错误仍判失败", True))
 
     bad = [n for n, ok in arms if not ok]
     for n, ok in arms:
         print(("✓" if ok else "✗"), n)
     print(f"\n{len(arms) - len(bad)}/{len(arms)} 通过")
     return 0 if not bad else 1
+
+
+def _assert_not_capped(payload: dict) -> bool:
+    """日配额是容量状态，其他业务错误是真失败——两者必须分开。"""
+    if payload.get("code") == "daily_order_cap":
+        return True
+    raise StepFailed(f"业务错误：{payload.get('code')}")
 
 
 def _assert_filled(order: dict) -> None:
