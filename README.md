@@ -18,7 +18,7 @@ Multi-tenant **paper-trading** service exposed via a FastAPI REST + WebSocket AP
 - **Position & cash ledgering** — real-time P&L, average cost, realized gains
 - **Real-time streaming** — WebSocket endpoint (`/ws`) pushes live quotes, order-status, and fill events
 - **MCP server** — 19 tools (accounts, orders, positions, instrument search, bars, strategy lifecycle) on stdio and streamable HTTP. Caller identity is delegated: HTTP callers present their own `Authorization` credential and act as themselves on a shared deployment; stdio falls back to the configured token
-- **Market data** — `SimulatedMarketDataProvider` (deterministic, for dev/tests), `PolygonMarketDataProvider` (real prices, end-of-day on free tier), and `FdOpenDataMarketDataProvider` (real daily bars + close-derived quotes from the [fd-open-data-mcp](https://github.com/FindDataTechnology/fd-open-data-mcp) ontology)
+- **Market data** — `SimulatedMarketDataProvider` (deterministic, for dev/tests) and the federated-view providers (`AstockMarketDataProvider` / `FdOpenDataMarketDataProvider`) are the selectable ones; `PolygonMarketDataProvider` remains in the codebase but is **not selectable through configuration** (no registered source declares its access kind)
 - **Quant strategies** - dual-track authoring: fixed templates (SMA cross, RSI reversion, Bollinger breakout, MACD cross, DCA) and sandboxed custom code (`on_bar(ctx)`); backtest with equity-curve stats; live paper runs that place attributed signals on your account. Per-user group limits (active strategies, daily orders, custom-code gate, symbol allowlist)
 - **Web UI** — React + TypeScript SPA with professional trading dashboard featuring:
   - **Three-column workspace**: watchlist (live quotes), price chart, and order panel
@@ -88,8 +88,9 @@ with that id named; there is no silent fallback to another provider.
 
 > The ontology-backed `fd-open-data` provider still exists (`marketdata/fd_open_data.py`)
 > but **cannot currently be selected through configuration**: no registered source
-> declares `access.kind: fd_open_data_ontology`. It is reachable only by constructing it
-> directly (tests/scripts). Its one-time ontology bootstrap —
+> declares `access.kind: fd_open_data_ontology`. The same holds for `PolygonMarketDataProvider`:
+> no source declares a Polygon-kind access. Both are reachable only by constructing them
+> directly (tests/scripts); neither is a supported deployment option. Its one-time ontology bootstrap —
 > `uv run python scripts/setup_fd_open_data.py` — and its concept family
 > (`FD_OPEN_DATA_CONCEPT` / `FD_OPEN_DATA_ENTITY_TYPE` / `FD_OPEN_DATA_FREQUENCY`,
 > default `nav.unit` / `fund` / `daily`) apply to that provider whenever a source is
@@ -112,6 +113,10 @@ cd web && npm install && npm run dev
 cd web && npm run build
 uv run fd-paper-trading   # SPA + API + /ws all at http://localhost:8000/
 ```
+
+The hosted deployment is reachable at **https://paper.finddatatech.cloud** — open it in a
+browser to register and mint an `fdt_` API token (Settings → API tokens) for external MCP
+clients.
 
 ## Architecture
 

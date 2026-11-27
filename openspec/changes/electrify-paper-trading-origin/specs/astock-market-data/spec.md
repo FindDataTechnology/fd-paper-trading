@@ -9,7 +9,7 @@
 
 ## MODIFIED Requirements
 
-### Requirement: Astock provider reads the sharded daily table through a pinned federated view
+### Requirement: The provider resolves every entity type it reads through that type's price family
 
 `AstockMarketDataProvider` SHALL serve real A-share daily OHLC bars by reading the
 platform's federated view over the sharded store, read-only. The read SHALL resolve each

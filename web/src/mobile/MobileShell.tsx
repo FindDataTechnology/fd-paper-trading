@@ -39,6 +39,9 @@ export default function MobileShell() {
         <Link to="/" className="muted" style={{ fontSize: 11, whiteSpace: "nowrap" }}>
           Desktop
         </Link>
+        <Link to="/settings/tokens" className="muted" style={{ fontSize: 11, whiteSpace: "nowrap" }}>
+          Tokens
+        </Link>
       </header>
 
       <div className="m-body">

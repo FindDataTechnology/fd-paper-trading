@@ -29,39 +29,39 @@
 
 ## 2. 服务 SPA 的令牌面
 
-- [ ] 2.1 新增 `web/src/pages/TokensPage.tsx`：列表（调 `GET /api/v1/tokens`）、铸造（`POST`，
+- [x] 2.1 新增 `web/src/pages/TokensPage.tsx`：列表（调 `GET /api/v1/tokens`）、铸造（`POST`，
       明文只在本页状态里显示一次并在离开/刷新后消失）、吊销（`DELETE`）。明文旁固定写一句
       「把这一串填进壹座的「设置 → 连接 → 柏讯·模拟交易」」。
       验证：新增 `TokensPage.test.tsx`（3 个用例：列表明文恒为 null、铸造显示一次、吊销后行消失/标记）。
-- [ ] 2.2 路由与导航：`web/src/App.tsx` 加受保护路由，`web/src/components/Layout.tsx` 加一项 NavLink。
+- [x] 2.2 路由与导航：`web/src/App.tsx` 加受保护路由，`web/src/components/Layout.tsx` 加一项 NavLink。
       验证：`web/src/components/Layout.test.tsx`（若无则新建）断言导航含该项且指向令牌路由。
-- [ ] 2.3 前端类型：`web/src/api/types.ts` 增加 `ApiToken` 与铸造请求/响应类型；`web/src/api/hooks.ts`
+- [x] 2.3 前端类型：`web/src/api/types.ts` 增加 `ApiToken` 与铸造请求/响应类型；`web/src/api/hooks.ts`
       增加三个 hooks。验证：`npm run build`（CI 的 tsc 岗）通过。
-- [ ] 2.4 移动端入口：`web/src/mobile/*` 若已有导航栏，补同一项（无移动端导航则记为不适用并留一行说明）。
+- [x] 2.4 移动端入口：`web/src/mobile/*` 若已有导航栏，补同一项（无移动端导航则记为不适用并留一行说明）。
 
 ## 3. 清单与文档
 
-- [ ] 3.1 `line-manifest.json` 的 `public_base_url` 改为 `https://paper.finddatatech.cloud/fd-paper-trading`。
+- [x] 3.1 `line-manifest.json` 的 `public_base_url` 改为 `https://paper.finddatatech.cloud/fd-paper-trading`。
       验证：`GET https://paper.finddatatech.cloud/fd-paper-trading/.well-known/line-manifest.json`
       （经兜底 302/200）与 `https://paper.finddatatech.cloud/.well-known/line-manifest.json` 的内容一致；
       `python3 -c "import json;json.load(open('line-manifest.json'))"` 通过；`tests/test_manifest_hygiene.py` 绿。
-- [ ] 3.2 `docs/line-auth-evidence.md` 的 `note` 段落更新：公网入口已存在，并写明「逐用户消费走该入口，
+- [x] 3.2 `docs/line-auth-evidence.md` 的 `note` 段落更新：公网入口已存在，并写明「逐用户消费走该入口，
       网关条目仅作 discoverability」的现状与判据。
-- [ ] 3.3 仓内 README / README.zh-CN 的「运行 / 访问」一节补一行指向公网入口（不重复内部 mesh 细节）。
+- [x] 3.3 仓内 README / README.zh-CN 的「运行 / 访问」一节补一行指向公网入口（不重复内部 mesh 细节）。
 
 ## 4. 规格收口（本节只改 spec 文本，不改产品代码）
 
-- [ ] 4.1 `openspec/specs/order-execution/spec.md`：按本 change 的 delta 替换
+- [x] 4.1 `openspec/specs/order-execution/spec.md`：按本 change 的 delta 替换
       `Stateless fill calculator` 整块（删掉 offloaded 从句，加「同步完成」场景）。
-- [ ] 4.2 `openspec/specs/market-data/spec.md`：Purpose 的「三实现（模拟/Polygon/fd-open-data）」改为
+- [x] 4.2 `openspec/specs/market-data/spec.md`：Purpose 的「三实现（模拟/Polygon/fd-open-data）」改为
       「三种 provider 类，仅一种可由配置选中」，并替换 Polygon 那条 requirement（加「配置选不到」场景）。
-- [ ] 4.3 `openspec/specs/astock-market-data/spec.md`：按本 change 的 delta 替换
+- [x] 4.3 `openspec/specs/astock-market-data/spec.md`：按本 change 的 delta 替换
       `Astock provider reads the sharded daily table through a pinned federated view` 整块，
       并同步更新 Purpose 首句为价格族模型。
-- [ ] 4.4 `CLAUDE.md` 里「The ontology-backed provider … configuration cannot select it today」一段
+- [x] 4.4 `CLAUDE.md` 里「The ontology-backed provider … configuration cannot select it today」一段
       保留但补一句 Polygon 同此；同时删掉任何仍把 Polygon 说成可选实现的表述。
       验证：`grep -n "Polygon" CLAUDE.md README.md README.zh-CN.md` 只出现「保留但不可选」口径。
-- [ ] 4.5 `openspec validate` 全绿：`openspec validate --all` 与 `openspec validate electrify-paper-trading-origin --strict`。
+- [x] 4.5 `openspec validate` 全绿：`openspec validate --all` 与 `openspec validate electrify-paper-trading-origin --strict`。
 
 ## 5. 验收
 
@@ -76,5 +76,5 @@
 - [ ] 6.1 出片：公开仓 CI → hkccr → ccr，滚 `fd-infra-deploy/all-services/prod/fd-paper-trading.yaml` 的 tag；
       滚完在 pod 内核对 `/app/web/dist` 含令牌页 chunk、`/health` 200。
 - [ ] 6.2 发版后重跑 5.1/5.2 并把结果追加进 `docs/acceptance-origin.md`。
-- [ ] 6.3 归档前确认：根账 `openspec/specs/` 里 `astock-market-data` 与本仓这份文本一致（同一份模型），
+- [x] 6.3 归档前确认：根账 `openspec/specs/` 里 `astock-market-data` 与本仓这份文本一致（同一份模型），
       不一致就再开一条对齐任务而不是就此归档。

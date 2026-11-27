@@ -17,7 +17,7 @@
 - **订单执行** — 市价单和限价单，通过无状态纯 Python 撮合计算器进行模拟成交
 - **持仓与资金账本** — 实时盈亏、平均成本、已实现收益
 - **实时推送** — WebSocket 端点（`/ws`）推送实时行情、订单状态和成交事件
-- **市场数据** — `SimulatedMarketDataProvider`（确定性，用于开发/测试）、`PolygonMarketDataProvider`（真实价格，免费套餐为收盘价）、**`AstockMarketDataProvider`**（前复权 A 股日线，钉源 `astock_daily`，通过联邦视图读取 4,576 只 2006–2026 年数据；需配置 `ASTOCK_DSN`，详见 `.env.example`）
+- **市场数据** — 可由配置选中的是 `SimulatedMarketDataProvider`（确定性，用于开发/测试）与联邦视图族（**`AstockMarketDataProvider`**：前复权 A 股日线，按实体类型走价格族、通过联邦视图读取，需配置 `ASTOCK_DSN`，详见 `.env.example`；`FdOpenDataMarketDataProvider`）。`PolygonMarketDataProvider` 保留在代码里，但**无法通过配置选中**（没有登记源声明它的访问类型）
 - **Web 界面** — React + TypeScript 单页应用，提供专业交易工作台：
   - **三栏布局**：自选股列表（实时报价）、价格图表和下单面板
   - **点击交易**：从自选股列表选择任意标的，图表和下单表单即时更新
@@ -80,8 +80,9 @@ MARKET_DATA_SOURCE_ID=astock_daily uv run fd-paper-trading
 > **已删除**。环境里还留着任何一个，启动都会失败并点名——升级前请从 `.env` 里删掉。
 
 > 走本体库的 `fd-open-data` provider 仍在（`marketdata/fd_open_data.py`），但**当前无法
-> 通过配置选中**：注册表里没有任何源声明 `access.kind: fd_open_data_ontology`，只能被
-> 直接构造（测试/脚本）。它的一次性本体库 bootstrap（`uv run python scripts/setup_fd_open_data.py`）
+> 通过配置选中**：注册表里没有任何源声明 `access.kind: fd_open_data_ontology`。`PolygonMarketDataProvider`
+> 同理：没有源声明 Polygon 访问类型。两者都只能被直接构造（测试/脚本），都不是受支持的部署选项。
+> 前者的一次性本体库 bootstrap（`uv run python scripts/setup_fd_open_data.py`）
 > 与 concept family（`FD_OPEN_DATA_CONCEPT` / `FD_OPEN_DATA_ENTITY_TYPE` /
 > `FD_OPEN_DATA_FREQUENCY`，默认 `nav.unit` / `fund` / `daily`）只在有源为它登记后才有意义。
 > 已废弃的 concept 退化为数据缺口，绝不报错。
@@ -103,6 +104,9 @@ cd web && npm install && npm run dev
 cd web && npm run build
 uv run fd-paper-trading   # SPA + API + /ws 全部在 http://localhost:8000/
 ```
+
+托管部署的访问入口是 **https://paper.finddatatech.cloud** —— 浏览器打开后可注册，并在
+「设置 → API 令牌」页铸出 `fdt_` 令牌供外部 MCP 客户端使用。
 
 ## 架构
 

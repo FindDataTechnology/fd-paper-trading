@@ -12,8 +12,10 @@ The system SHALL compute order fills with a stateless, pure-arithmetic fill calc
 that takes one quote and one order (and, for stop-type orders, the order's trigger state)
 and returns the fill outcome, with no third-party matching engine and no per-order engine
 construction. Account state (positions, balances) SHALL NOT live in the calculator; it
-SHALL live in the database, so accounts are isolated by `account_id`. The calculator SHALL
-run off the FastAPI event loop (offloaded) so the API is not blocked.
+SHALL live in the database, so accounts are isolated by `account_id`. Because the calculator
+is pure arithmetic over a handful of `Decimal` values, it runs synchronously in the caller;
+the system SHALL NOT be required to offload it to a worker, and SHALL NOT pay a thread or
+process hand-off for it.
 
 Fill semantics SHALL be: a market buy fills at the `ask`; a market sell fills at the `bid`;
 a limit buy fills at the `ask` when its limit is at or above the `ask`, otherwise it rests;
@@ -34,6 +36,11 @@ partial fills, slippage, or price movement.
 - **WHEN** an order is filled
 - **THEN** the fill is computed in-process by the service's own calculator, with no
   third-party trading framework imported or invoked
+
+#### Scenario: 计算器同步完成，不付线程交接成本
+
+- **WHEN** 一次下单经过撮合
+- **THEN** 成交结果是同一次调用内算出的，不跨线程、不跨进程、不等待 future
 
 #### Scenario: Resting limit consumes no state
 

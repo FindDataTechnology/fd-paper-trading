@@ -85,4 +85,12 @@ describe("MobileApp", () => {
     renderWithProviders(<MobileApp />);
     expect(screen.getByText("Desktop").closest("a")).toHaveAttribute("href", "/");
   });
+
+  it("reaches the token surface from mobile", () => {
+    renderWithProviders(<MobileApp />);
+    expect(screen.getByText("Tokens").closest("a")).toHaveAttribute(
+      "href",
+      "/settings/tokens"
+    );
+  });
 });

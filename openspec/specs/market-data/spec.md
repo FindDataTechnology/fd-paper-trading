@@ -2,7 +2,7 @@
 
 ## Purpose
 
-约束行情供给抽象：provider 接口、三实现（模拟/Polygon/fd-open-data）的语义与数据缺口表达（None=gap）、概念族可配置，以及回测/实盘/撮合共用同一价格世界。
+约束行情供给抽象：provider 接口、三种 provider 类（模拟/Polygon/fd-open-data，仅模拟与联邦视图族可由配置选中）的语义与数据缺口表达（None=gap）、概念族可配置，以及回测/实盘/撮合共用同一价格世界。
 
 ## Requirements
 
@@ -40,13 +40,19 @@ price. The simulated provider SHALL always return a quote (no data gaps).
 
 ### Requirement: Polygon provider (real previous-close)
 
-The `PolygonMarketDataProvider` SHALL derive a quote from Polygon's previous-close
-aggregate (free tier): the last close is the reference price, and a small spread (5 bps
-each side, `$0.01` floor) is synthesized around it to produce `bid`/`ask`. Quotes SHALL be
-cached per symbol for a TTL (default 300s). The provider SHALL return `None` when there is
-no API key, on HTTP error, on a non-200 response (rate-limited / not entitled / unknown
-symbol), or when no close is present. Instruments SHALL come from the service's own
-instrument value type.
+The `PolygonMarketDataProvider` class SHALL remain in the codebase and SHALL, when
+constructed directly, derive a quote from Polygon's previous-close aggregate (free tier):
+the last close is the reference price, and a small spread (5 bps each side, `$0.01` floor)
+is synthesized around it to produce `bid`/`ask`. Quotes SHALL be cached per symbol for a TTL
+(default 300s). The provider SHALL return `None` when there is no API key, on HTTP error, on
+a non-200 response (rate-limited / not entitled / unknown symbol), or when no close is
+present. Instruments SHALL come from the service's own instrument value type.
+
+Because provider selection resolves exclusively through the price-source registry's declared
+`access.kind` (see "Provider is swappable"), and no registered source declares a Polygon-kind
+access, this class SHALL NOT be selectable through configuration today. Its presence is
+library code, not a supported deployment option; the system SHALL NOT present it as one to
+operators or to the product surface.
 
 #### Scenario: No API key returns no quote
 
@@ -57,6 +63,12 @@ instrument value type.
 
 - **WHEN** the Polygon provider fetches a previous close of `c`
 - **THEN** the returned `bid < c < ask` and `bid != ask`
+
+#### Scenario: 配置选不到 Polygon
+
+- **WHEN** 运维只通过 `MARKET_DATA_SOURCE_ID` 选择行情源，且注册表里没有任何源声明 Polygon 访问类型
+- **THEN** 不存在任何配置组合会选中 `PolygonMarketDataProvider`
+- **AND THEN** 该事实对运维可见（文档与 provider 清单不把 Polygon 列为可选项）
 
 ### Requirement: Instrument resolution
 
