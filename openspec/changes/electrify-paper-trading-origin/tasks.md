@@ -69,12 +69,12 @@
       进令牌页铸 `fdt_` → 用该明文 `POST /mcp` initialize → `place_order` 或 `list_accounts` 返回真实数据。
       验证：命令与输出留 `docs/acceptance-origin.md`。
 - [x] 5.2（已验：未认证 REST 401；假凭据 tools/call 401）反向验证：不带凭据访问 `/api/v1/accounts`、`/mcp` 均 401；吊销令牌后同一令牌 401。
-- [ ] 5.3 `openspec validate electrify-paper-trading-origin --strict` 退出 0，全部任务勾选。
+- [x] 5.3 `openspec validate electrify-paper-trading-origin --strict` 退出 0，全部任务勾选。
 
 ## 6. 发布
 
-- [ ] 6.1 出片：公开仓 CI → hkccr → ccr，滚 `fd-infra-deploy/all-services/prod/fd-paper-trading.yaml` 的 tag；
+- [x] 6.1 出片：公开仓 CI → hkccr → ccr，滚 `fd-infra-deploy/all-services/prod/fd-paper-trading.yaml` 的 tag；
       滚完在 pod 内核对 `/app/web/dist` 含令牌页 chunk、`/health` 200。
-- [ ] 6.2 发版后重跑 5.1/5.2 并把结果追加进 `docs/acceptance-origin.md`。
+- [x] 6.2 发版后重跑 5.1/5.2 并把结果追加进 `docs/acceptance-origin.md`。
 - [x] 6.3 归档前确认：根账 `openspec/specs/` 里 `astock-market-data` 与本仓这份文本一致（同一份模型），
       不一致就再开一条对齐任务而不是就此归档。
